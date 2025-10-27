@@ -1,4 +1,3 @@
-import os
 import warnings
 import logging
 
@@ -24,13 +23,11 @@ if IS_COMFYUI_ENV:
     # In ComfyUI environment, suppress more warnings
     logging.getLogger("transformers").setLevel(logging.ERROR)
     logging.getLogger("diffusers").setLevel(logging.ERROR)
-
+import os
 import torch
 import numpy as np
 from PIL import Image
 import json
-
-# Try to import folder_paths from ComfyUI
 try:
     import folder_paths
 except ImportError:
@@ -40,7 +37,6 @@ except ImportError:
         supported_pt_extensions = {".pt", ".pth", ".ckpt", ".safetensors"}
         folder_names_and_paths = {}
     folder_paths = MockFolderPaths()
-
 from huggingface_hub import snapshot_download
 import sys
 from pathlib import Path
@@ -49,8 +45,6 @@ import math
 import matplotlib.colors
 import tempfile
 from torchvision import transforms
-
-# Try to import model_management from ComfyUI
 try:
     import model_management
 except ImportError:
@@ -69,6 +63,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).parent))
 
 # --- Imports from the original SDPose project ---
+# --- Imports from the original SDPose project ---
 from diffusers import DDPMScheduler, AutoencoderKL, UNet2DConditionModel
 from transformers import CLIPTokenizer, CLIPTextModel
 
@@ -82,7 +77,6 @@ except ImportError:
     from models.HeatmapHead import get_heatmap_head
     from models.ModifiedUNet import Modified_forward
     from pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
-
 from safetensors.torch import load_file
 
 try:
@@ -348,6 +342,28 @@ def convert_to_openpose_json(all_keypoints, all_scores, image_width, image_heigh
         people.append(person_data)
     return {"people": people, "canvas_width": int(image_width), "canvas_height": int(image_height)}
 
+def _combine_frame_jsons(frame_jsons):
+    """合并所有帧的JSON数据"""
+    combined_data = {
+        "frame_count": len(frame_jsons),
+        "frames": []
+    }
+    
+    for i, frame_json_str in enumerate(frame_jsons):
+        try:
+            # 检查 frame_json_str 是否已经是字典
+            if isinstance(frame_json_str, dict):
+                frame_data = frame_json_str
+            else:
+                frame_data = json.loads(frame_json_str)
+            
+            frame_data["frame_index"] = i
+            combined_data["frames"].append(frame_data)
+        except json.JSONDecodeError as e:
+            print(f"SDPose Node: Warning - Failed to parse JSON for frame {i}: {e}")
+            combined_data["frames"].append({"frame_index": i, "error": "JSON parsing failed"})
+    
+    return json.dumps(combined_data, indent=2)
 
 class YOLOModelLoader:
     """ComfyUI node to load a YOLO model for object detection."""
@@ -451,15 +467,36 @@ class SDPoseOODLoader:
         return (sdpose_model,)
 
 class SDPoseOODProcessor:
-    """ComfyUI node to run the SDPose inference pipeline."""
+    """
+    ComfyUI node to run SDPose inference using true parallel batching.
+    Implements a 3-stage process:
+    1. Collect: Detect all persons in all frames using YOLO.
+    2. Batch Inference: Run SDPose model in batches on detected persons.
+    3. Reconstruct: Draw poses back onto their original frames.
+    """
+    
+    # 一个简单的数据类，用于跟踪检测到的人
+    class DetectionJob:
+        def __init__(self, frame_idx, person_idx, input_tensor, crop_info):
+            self.frame_idx = frame_idx
+            self.person_idx = person_idx
+            self.input_tensor = input_tensor
+            self.crop_info = crop_info
+            
+            # 这些字段将在推理后填充
+            self.kpts = None
+            self.scores = None
+
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
                 "sdpose_model": ("SDPOSE_MODEL",),
-                "image": ("IMAGE",),
+                "images": ("IMAGE",),
                 "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}),
                 "overlay_alpha": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
+                # 替换 'process_batch' 为 'batch_size'
+                "batch_size": ("INT", {"default": 8, "min": 1, "max": 64}),
             },
             "optional": {
                 "yolo_model": ("YOLO_MODEL",),
@@ -469,31 +506,48 @@ class SDPoseOODProcessor:
         }
 
     RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("image", "pose_json")
-    FUNCTION = "process"
+    RETURN_NAMES = ("images", "pose_jsons")
+    FUNCTION = "process_sequence"
     CATEGORY = "SDPose"
 
-    def process(self, sdpose_model, image, score_threshold, overlay_alpha, yolo_model=None, save_for_editor=False, filename_prefix_edit="poses/pose_edit"):
+    def process_sequence(self, sdpose_model, images, score_threshold, overlay_alpha, batch_size=8, yolo_model=None, save_for_editor=False, filename_prefix_edit="poses/pose_edit"):
+        
         device = sdpose_model["device"]
         keypoint_scheme = sdpose_model["keypoint_scheme"]
         input_size = (768, 1024)
+        
+        B, H, W, C = images.shape
+        images_np = images.cpu().numpy()
+        print(f"SDPose Node: Received {B} frames. Starting 3-stage process with batch_size={batch_size}.")
 
-        # --- Handle batch processing for video frames ---
-        B, H, W, C = image.shape
-        images_np = image.cpu().numpy()
+
+        # 检查模型是否因 "unload_on_finish" 而在CPU上，如果是则移回GPU
+        print(f"SDPose Node: Ensuring models are on device: {device}...")
+        try:
+            for key in ["unet", "vae", "decoder"]:
+                if key in sdpose_model:
+                    # 获取模型任意参数的当前设备
+                    current_device = next(sdpose_model[key].parameters()).device
+                    if current_device != device:
+                        print(f"SDPose Node: Moving '{key}' from {current_device} to {device}.")
+                        sdpose_model[key].to(device)
+        except Exception as e:
+            print(f"SDPose Node: CRITICAL ERROR moving models to device: {e}. Aborting.")
+            raise e
         
-        print(f"SDPose Node: Processing {B} frame(s) with resolution {W}x{H}")
-        
-        # Initialize progress tracking
+        # --- 实例化管道 ---
+        print("SDPose Node: Instantiating pipeline...")
+        # 尝试导入ComfyUI的进度条
         try:
             from comfy.utils import ProgressBar
-            comfy_pbar = ProgressBar(B)
+            comfy_pbar = ProgressBar(B * 3) # 3个阶段: Detect, Infer, Reconstruct
             progress = 0
         except ImportError:
             comfy_pbar = None
             progress = 0
-
-        # --- Instantiate a mock pipeline for inference ---
+            
+        # --- 实例化管道 ---
+        # (这部分代码来自用户B的 _process_batch)
         class MockPipeline:
             def __init__(self, model_dict):
                 self.unet = model_dict["unet"]
@@ -508,13 +562,9 @@ class SDPoseOODProcessor:
                 unet_dtype = self.unet.dtype
                 bsz = rgb_in.shape[0]
                 
-                # VAE is fp32, cast its output to the UNet's precision
                 rgb_latent = self.vae.encode(rgb_in).latent_dist.sample() * 0.18215
                 rgb_latent = rgb_latent.to(dtype=unet_dtype)
-
                 t = torch.tensor(timesteps, device=self.device).long()
-                
-                # Cast other float inputs to the UNet's precision
                 text_embed = self.empty_text_embed.repeat((bsz, 1, 1)).to(dtype=unet_dtype)
                 task_emb_anno = torch.tensor([1, 0]).float().unsqueeze(0).to(self.device)
                 task_emb_anno = torch.cat([torch.sin(task_emb_anno), torch.cos(task_emb_anno)], dim=-1).repeat(bsz, 1)
@@ -525,16 +575,14 @@ class SDPoseOODProcessor:
 
         pipeline = MockPipeline(sdpose_model)
 
-        # --- Process all frames ---
-        result_images = []
-        all_frames_json_data = []
+        # --- 步骤 1: 收集 (YOLO 检测和预处理) ---
+        print("SDPose Node: Stage 1/3 - Detecting persons...")
+        all_jobs = [] # 存储所有待处理的人
         
         for frame_idx in range(B):
-            # --- Convert current frame to numpy array ---
             original_image_rgb = (images_np[frame_idx] * 255).astype(np.uint8)
             original_image_bgr = cv2.cvtColor(original_image_rgb, cv2.COLOR_RGB2BGR)
 
-            # --- YOLO Detection for current frame ---
             if yolo_model is not None and YOLO_AVAILABLE:
                 results = yolo_model(original_image_bgr, verbose=False)
                 bboxes = []
@@ -544,139 +592,161 @@ class SDPoseOODProcessor:
                             if int(box.cls[0]) == 0 and float(box.conf[0]) > 0.5:
                                 bboxes.append(box.xyxy[0].cpu().numpy().tolist())
                 if not bboxes:
-                    h, w = original_image_bgr.shape[:2]
-                    bboxes = [[0, 0, w, h]]
+                    bboxes = [[0, 0, W, H]] # 无检测, 处理全图
             else:
-                if yolo_model is not None and not YOLO_AVAILABLE and frame_idx == 0:
-                    print("SDPose Node Warning: YOLO model provided, but 'ultralytics' is not installed. Processing full image.")
-                h, w = original_image_bgr.shape[:2]
-                bboxes = [[0, 0, w, h]]
-
-            # --- Process each detected person in current frame ---
-            pose_canvas = np.zeros_like(original_image_rgb)
-            all_keypoints, all_scores = [], []
-
-            for bbox in bboxes:
+                bboxes = [[0, 0, W, H]] # 无YOLO, 处理全图
+            
+            for person_idx, bbox in enumerate(bboxes):
                 input_tensor, _, crop_info = preprocess_image_for_sdpose(original_image_bgr, bbox, input_size)
-                input_tensor = input_tensor.to(device)
+                # input_tensor 仍在CPU上，我们只收集作业
+                all_jobs.append(self.DetectionJob(frame_idx, person_idx, input_tensor, crop_info))
 
-                with torch.no_grad():
-                    out = pipeline(input_tensor, timesteps=[999], test_cfg={'flip_test': False}, show_progress_bar=False, mode="inference")
-                    # The MMPose decoder head already returns numpy arrays on CPU
-                    keypoints = out[0].keypoints[0]
-                    scores = out[0].keypoint_scores[0]
+            progress += 1
+            if comfy_pbar: comfy_pbar.update_absolute(progress)
 
-                keypoints_original = restore_keypoints_to_original(keypoints, crop_info, input_size, (original_image_rgb.shape[1], original_image_rgb.shape[0]))
+        total_detections = len(all_jobs)
+        print(f"SDPose Node: Stage 1 complete. Found {total_detections} total persons in {B} frames.")
 
-                if keypoint_scheme == "body":
-                    # Body 模式：直接追加和绘制
-                    all_keypoints.append(keypoints_original)
-                    all_scores.append(scores)
-                    pose_canvas = draw_body17_keypoints_openpose_style(pose_canvas, keypoints_original, scores, threshold=score_threshold)
+        # --- 步骤 2: 并行推理 (批量处理) ---
+        print(f"SDPose Node: Stage 2/3 - Running inference in batches of {batch_size}...")
+        
+        for i in range(0, total_detections, batch_size):
+            batch_jobs = all_jobs[i : i + batch_size]
+            current_batch_size = len(batch_jobs)
+            
+            # 组合批次张量
+            batch_tensors = torch.cat([job.input_tensor for job in batch_jobs], dim=0).to(device)
+            
+            # **真正的并行推理**
+            with torch.no_grad():
+                out = pipeline(batch_tensors, timesteps=[999], test_cfg={'flip_test': False}, show_progress_bar=False, mode="inference")
+            
+            for j in range(current_batch_size):
+                # 'out[j]' 是第 j 个作业对应的 DataSample
+                # .keypoints 的形状是 (1, K, 2)，所以我们取 [0]
+                # .keypoint_scores 的形状是 (1, K)，所以我们取 [0]
+                batch_jobs[j].kpts = out[j].keypoints[0]
+                batch_jobs[j].scores = out[j].keypoint_scores[0]
                 
-                else: # wholebody
-                    # Wholebody 模式：应用 Gradio 的 133 -> 134 点转换逻辑
-                    keypoints_with_neck = keypoints_original.copy()
-                    scores_with_neck = scores.copy()
-                    
-                    if len(keypoints_original) >= 17:
-                        neck = (keypoints_original[5] + keypoints_original[6]) / 2
-                        neck_score = min(scores[5], scores[6]) if scores[5] > 0.3 and scores[6] > 0.3 else 0
-                        
-                        # 插入 neck 点，将 133 数组变为 134
-                        keypoints_with_neck = np.insert(keypoints_original, 17, neck, axis=0)
-                        scores_with_neck = np.insert(scores, 17, neck_score)
-                        
-                        # 重新映射身体关节
-                        mmpose_idx = np.array([17, 6, 8, 10, 7, 9, 12, 14, 16, 13, 15, 2, 1, 4, 3])
-                        openpose_idx = np.array([1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17])
-                        
-                        temp_kpts = keypoints_with_neck.copy()
-                        temp_scores = scores_with_neck.copy()
-                        temp_kpts[openpose_idx] = keypoints_with_neck[mmpose_idx]
-                        temp_scores[openpose_idx] = scores_with_neck[mmpose_idx]
-                        
-                        keypoints_with_neck = temp_kpts
-                        scores_with_neck = temp_scores
-                    
-                    # 将处理后的 134 点数组用于 JSON 和绘图
-                    all_keypoints.append(keypoints_with_neck)
-                    all_scores.append(scores_with_neck)
-                    pose_canvas = draw_wholebody_keypoints_openpose_style(
-                        pose_canvas, keypoints_with_neck, scores_with_neck, 
-                        threshold=score_threshold
-                    )
 
-            # --- Finalize current frame output ---
+            
+            progress += (current_batch_size / total_detections) * B # 按比例更新进度条
+            if comfy_pbar: comfy_pbar.update_absolute(int(progress) + B) # B是第一阶段的偏移
+
+        print(f"SDPose Node: Stage 2 complete. Processed {total_detections} persons.")
+
+        # --- 步骤 3: 重组 (绘图和JSON) ---
+        print("SDPose Node: Stage 3/3 - Reconstructing frames...")
+        
+        # 准备每一帧的容器
+        frame_data = []
+        for i in range(B):
+            frame_data.append({
+                "canvas": np.zeros_like((images_np[i] * 255).astype(np.uint8)),
+                "all_keypoints": [],
+                "all_scores": [],
+            })
+            
+        # 循环所有已完成的作业
+        for job in all_jobs:
+            frame_idx = job.frame_idx
+            
+            # 恢复坐标
+            kpts_original = restore_keypoints_to_original(
+                job.kpts, job.crop_info, input_size, (W, H)
+            )
+            scores = job.scores
+            
+            # 应用 133 -> 134 点转换
+            if keypoint_scheme == "body":
+                kpts_final = kpts_original
+                scores_final = scores
+                frame_data[frame_idx]["canvas"] = draw_body17_keypoints_openpose_style(
+                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, threshold=score_threshold
+                )
+            else: # wholebody
+                kpts_final = kpts_original.copy()
+                scores_final = scores.copy()
+                if len(kpts_original) >= 17:
+                    neck = (kpts_original[5] + kpts_original[6]) / 2
+                    neck_score = min(scores[5], scores[6]) if scores[5] > 0.3 and scores[6] > 0.3 else 0
+                    kpts_final = np.insert(kpts_original, 17, neck, axis=0)
+                    scores_final = np.insert(scores, 17, neck_score)
+                    
+                    mmpose_idx = np.array([17, 6, 8, 10, 7, 9, 12, 14, 16, 13, 15, 2, 1, 4, 3])
+                    openpose_idx = np.array([1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17])
+                    
+                    temp_kpts = kpts_final.copy()
+                    temp_scores = scores_final.copy()
+                    temp_kpts[openpose_idx] = kpts_final[mmpose_idx]
+                    temp_scores[openpose_idx] = scores_final[mmpose_idx]
+                    
+                    kpts_final = temp_kpts
+                    scores_final = temp_scores
+                
+                frame_data[frame_idx]["canvas"] = draw_wholebody_keypoints_openpose_style(
+                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, threshold=score_threshold
+                )
+            
+            # 存储该人的姿态数据
+            frame_data[frame_idx]["all_keypoints"].append(kpts_final)
+            frame_data[frame_idx]["all_scores"].append(scores_final)
+        
+        # --- 终结：混合图像和JSON ---
+        result_images = []
+        all_frames_json_data = []
+
+        for frame_idx in range(B):
+            original_image_rgb = (images_np[frame_idx] * 255).astype(np.uint8)
+            pose_canvas = frame_data[frame_idx]["canvas"]
+            
+            # 混合
             result_image = cv2.addWeighted(original_image_rgb, 1.0 - overlay_alpha, pose_canvas, overlay_alpha, 0)
             result_images.append(result_image)
             
-            image_width = original_image_rgb.shape[1]
-            image_height = original_image_rgb.shape[0]
-
-            # 1. 生成当前帧的标准 OpenPose JSON
-            frame_json_data = convert_to_openpose_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme)
-            all_frames_json_data.append(frame_json_data)
+            # 生成JSON
+            frame_json = convert_to_openpose_json(
+                frame_data[frame_idx]["all_keypoints"],
+                frame_data[frame_idx]["all_scores"],
+                W, H, keypoint_scheme
+            )
+            all_frames_json_data.append(frame_json)
             
-            # 2. (可选) 生成并保存用于编辑器的 JSON 文件
+            # 保存编辑器JSON
             if save_for_editor:
-                # 生成编辑器格式的 Python 字典
-                data_to_save = convert_to_loader_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme, score_threshold)
-                
-                # --- 借鉴 SavePoseToJson 的文件保存逻辑 ---
                 try:
+                    data_to_save = convert_to_loader_json(
+                        frame_data[frame_idx]["all_keypoints"],
+                        frame_data[frame_idx]["all_scores"],
+                        W, H, keypoint_scheme, score_threshold
+                    )
+                    
                     output_dir = folder_paths.get_output_directory()
-                    full_output_folder, filename, _, subfolder, _ = folder_paths.get_save_image_path(filename_prefix_edit, output_dir, image_width, image_height)
+                    filename_with_frame = f"{filename_prefix_edit}_frame{frame_idx:06d}"
+                    full_output_folder, filename, _, _, _ = folder_paths.get_save_image_path(filename_with_frame, output_dir, W, H)
                     
-                    counter = frame_idx + 1
-                    try:
-                        # 检查已存在的文件
-                        existing_files = [f for f in os.listdir(full_output_folder) if f.startswith(filename + "_") and f.endswith(".json")]
-                        if existing_files:
-                            max_counter = 0
-                            for f in existing_files:
-                                try:
-                                    num_str = f[len(filename)+1:-5] # 从 "filename_00001.json" 中提取 "00001"
-                                    num = int(num_str)
-                                    if num > max_counter:
-                                        max_counter = num
-                                except ValueError:
-                                    continue # 忽略不匹配的文件
-                            counter = max_counter + frame_idx + 1
-                    except FileNotFoundError:
-                        os.makedirs(full_output_folder, exist_ok=True) # 如果 "poses" 目录不存在，则创建它
-                    
-                    final_filename = f"{filename}_{counter:05d}.json"
+                    os.makedirs(full_output_folder, exist_ok=True)
+                    # 简化文件名逻辑，不再检查计数器，直接覆盖
+                    final_filename = f"{filename}.json"
                     file_path = os.path.join(full_output_folder, final_filename)
 
                     with open(file_path, 'w') as f:
                         json.dump(data_to_save, f, indent=4)
-                    
-                    if frame_idx == 0:  # Only print once for the first frame
-                        print(f"SDPose Node: Saving editor-compatible poses to {full_output_folder}")
 
                 except Exception as e:
-                    if frame_idx == 0:  # Only print once for the first frame
+                    if frame_idx == 0:
                         print(f"SDPose Node: ERROR Failed to save editor-compatible pose JSON: {e}")
-            
-            # Update progress
-            progress += 1
-            if comfy_pbar is not None:
-                comfy_pbar.update_absolute(progress)
 
-        # --- Combine all frames ---
-        result_images_np = np.stack(result_images, axis=0)  # Shape: (B, H, W, C)
+            progress += 1
+            if comfy_pbar: comfy_pbar.update_absolute(progress + B * 2) # B*2是前两个阶段的偏移
+
+        print("SDPose Node: Stage 3 complete. Reconstruction finished.")
         
-        # Convert to tensor format expected by ComfyUI (B, H, W, C) -> (B, H, W, C) float32 0-1
-        result_tensor = torch.from_numpy(result_images_np.astype(np.float32) / 255.0)
+        # --- 打包返回 ---
+        result_tensor = torch.from_numpy(np.stack(result_images, axis=0).astype(np.float32) / 255.0)
+        combined_json = _combine_frame_jsons(all_frames_json_data)
         
-        # For JSON output, we'll return the data for all frames
-        combined_json_data = {
-            "frames": all_frames_json_data,
-            "total_frames": B
-        }
-        
-        # --- Unload models if requested ---
+        # --- 卸载模型 ---
         if sdpose_model.get("unload_on_finish", False):
             print("SDPose Node: Unloading models from VRAM to CPU.")
             offload_device = torch.device("cpu")
@@ -685,7 +755,7 @@ class SDPoseOODProcessor:
                     sdpose_model[key].to(offload_device)
             model_management.soft_empty_cache()
 
-        return (result_tensor, json.dumps(combined_json_data, indent=2))
+        return (result_tensor, combined_json)
 
 # --- Node Mappings for ComfyUI ---
 NODE_CLASS_MAPPINGS = {

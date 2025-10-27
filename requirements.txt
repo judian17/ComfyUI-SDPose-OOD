@@ -13,8 +13,8 @@ safetensors
 Pillow
 scipy
 tqdm
-torch
-torchvision
+#torch
+#torchvision
 ultralytics
 xtcocotools
 
