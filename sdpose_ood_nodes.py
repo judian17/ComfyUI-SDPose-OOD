@@ -1,9 +1,46 @@
 import os
+import warnings
+import logging
+
+# Suppress common warnings to reduce noise
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*Redirects are currently not supported.*")
+
+# Set logging level to reduce verbose output
+logging.getLogger("torch.distributed").setLevel(logging.ERROR)
+logging.getLogger("deepspeed").setLevel(logging.ERROR)
+
+# Environment detection
+IS_COMFYUI_ENV = False
+try:
+    import comfy
+    IS_COMFYUI_ENV = True
+except ImportError:
+    pass
+
+# Additional warning suppression for specific environments
+if IS_COMFYUI_ENV:
+    # In ComfyUI environment, suppress more warnings
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("diffusers").setLevel(logging.ERROR)
+
 import torch
 import numpy as np
 from PIL import Image
 import json
-import folder_paths
+
+# Try to import folder_paths from ComfyUI
+try:
+    import folder_paths
+except ImportError:
+    # If not available, create a mock object for testing
+    class MockFolderPaths:
+        models_dir = os.path.expanduser("~/models")
+        supported_pt_extensions = {".pt", ".pth", ".ckpt", ".safetensors"}
+        folder_names_and_paths = {}
+    folder_paths = MockFolderPaths()
+
 from huggingface_hub import snapshot_download
 import sys
 from pathlib import Path
@@ -12,7 +49,21 @@ import math
 import matplotlib.colors
 import tempfile
 from torchvision import transforms
-import model_management
+
+# Try to import model_management from ComfyUI
+try:
+    import model_management
+except ImportError:
+    # If not available, create a mock object for testing
+    class MockModelManagement:
+        @staticmethod
+        def get_torch_device():
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        @staticmethod
+        def soft_empty_cache():
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    model_management = MockModelManagement()
 
 # Add the project root to Python path to allow direct imports
 sys.path.append(str(Path(__file__).parent))
@@ -20,17 +71,32 @@ sys.path.append(str(Path(__file__).parent))
 # --- Imports from the original SDPose project ---
 from diffusers import DDPMScheduler, AutoencoderKL, UNet2DConditionModel
 from transformers import CLIPTokenizer, CLIPTextModel
-from models.HeatmapHead import get_heatmap_head
-from models.ModifiedUNet import Modified_forward
-from pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
+
+# Try relative imports first, then absolute imports
+try:
+    from .models.HeatmapHead import get_heatmap_head
+    from .models.ModifiedUNet import Modified_forward
+    from .pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
+except ImportError:
+    # Fallback to absolute imports
+    from models.HeatmapHead import get_heatmap_head
+    from models.ModifiedUNet import Modified_forward
+    from pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
+
 from safetensors.torch import load_file
 
 try:
-    from ultralytics import YOLO
+    # Temporarily suppress ultralytics warnings during import
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from ultralytics import YOLO
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
     print("SDPose Node: ultralytics library not found. YOLO detection will be disabled.")
+except Exception as e:
+    YOLO_AVAILABLE = False
+    print(f"SDPose Node: Failed to import ultralytics: {e}. YOLO detection will be disabled.")
 
 # --- Add custom folder paths to ComfyUI ---
 SDPOSE_MODEL_DIR = os.path.join(folder_paths.models_dir, "SDPose_OOD")
