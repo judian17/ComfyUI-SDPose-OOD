@@ -92,8 +92,6 @@ It brings the powerful and robust pose estimation capabilities of SDPose-OOD int
 
 &nbsp;   * For Florence2, install [ComfyUI-Florence2](https://github.com/kijai/ComfyUI-Florence2).
 
-&nbsp;   * For GroundingDINO, install [ComfyUI-SAM2](https://github.com/neverbiasu/ComfyUI-SAM2) (code is sourced from here).
-
 
 
 ## Node Descriptions
@@ -154,7 +152,7 @@ It brings the powerful and robust pose estimation capabilities of SDPose-OOD int
 
 * **`keep_hands` (bool)**: `True` to keep hand keypoints (only effective for `WholeBody`).
 
-* **`keep_feet` (bool)**: `True` to keep feet keypoints.
+* **`keep_feet` (bool)**: `True` to keep feet keypoints (only effective for `WholeBody`).
 
 * **`overlay_alpha`**: Controls the visibility of the output image.
 
