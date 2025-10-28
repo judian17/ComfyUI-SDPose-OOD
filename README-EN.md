@@ -80,6 +80,12 @@ It brings the powerful and robust pose estimation capabilities of SDPose-OOD int
 
 &nbsp;           \* If you don't want to use Florence2/GroundingDINO, you can consider this detection model which performs excellently for both real and anime characters: \[real\_person\_detection](https://huggingface.co/deepghs/real\_person\_detection). Download your preferred model version (.pt file) from the repo and place it in the `models/yolo` folder.
 
+&nbsp;       \* \*\*groundingdino model\*\*: Download the model file and py file for either of the two models listed below, and place them in the models\\grounding-dino directory. Usually, the model will be downloaded automatically.
+
+&nbsp;           \* groundingdino\_swint\_ogc: \[groundingdino\_swint\_ogc](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/groundingdino\_swint\_ogc.pth) and \[GroundingDINO\_SwinT\_OGC.cfg.py](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/GroundingDINO\_SwinT\_OGC.cfg.py) 
+
+&nbsp;           \* ggroundingdino\_swinb\_cogcoor: \[groundingdino\_swinb\_cogcoor](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/groundingdino\_swinb\_cogcoor.pth) and \[GroundingDINO\_SwinB.cfg](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/GroundingDINO\_SwinB.cfg.py) 
+
 
 
 3\.  \*\*Install Optional Dependencies (for Advanced BBox Detection)\*\*:

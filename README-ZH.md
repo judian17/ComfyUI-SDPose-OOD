@@ -39,6 +39,9 @@
             * 默认的 YOLO 模型（如 `yolov8n-pose.pt`）更适合检测**真人**。
             * SDPose-OOD 本身对动漫人物有很好的处理效果（即使不使用 YOLO）。
             * 如果你不想使用 Florence2/GroundingDINO，可以考虑使用这个对于真人与动漫角色均效果优异的检测模型：[real_person_detection](https://huggingface.co/deepghs/real_person_detection)。下载仓库中的喜欢的版本的model.pt文件置于models/yolo文件夹中。
+        * **groundingdino模型**: 下载下面两个模型中的任意一个模型的模型文件与py文件，放置于models\grounding-dino。通常模型会自动下载。
+            * groundingdino_swint_ogc: [groundingdino_swint_ogc](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/groundingdino_swint_ogc.pth) 以及[GroundingDINO_SwinT_OGC.cfg.py](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/GroundingDINO_SwinT_OGC.cfg.py) 
+            * ggroundingdino_swinb_cogcoor: [groundingdino_swinb_cogcoor](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/groundingdino_swinb_cogcoor.pth) 以及[GroundingDINO_SwinB.cfg](https://huggingface.co/ShilongLiu/GroundingDINO/blob/main/GroundingDINO_SwinB.cfg.py) 
 
 3.  **安装可选依赖 (用于高级 BBox 检测)**:
     * 如需使用 Florence2，请安装 [ComfyUI-Florence2](https://github.com/kijai/ComfyUI-Florence2)。
