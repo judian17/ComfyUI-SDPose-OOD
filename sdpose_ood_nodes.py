@@ -40,6 +40,7 @@ except ImportError:
 from huggingface_hub import snapshot_download
 import sys
 from pathlib import Path
+import glob
 import cv2
 import math
 import matplotlib.colors
@@ -207,6 +208,89 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
             if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 3, (255, 255, 255), thickness=-1)
     return canvas
+
+# --- GroundingDINO Prediction Functions (Adapted from SAM2 Node) ---
+# (modified for SDPose context)
+def load_dino_image(image_pil):
+    # Need import from local_groundingdino here
+    try:
+        from .local_groundingdino.datasets import transforms as T
+    except ImportError:
+         raise ImportError("SDPose Node: Failed to import local_groundingdino transforms. Please ensure the 'local_groundingdino' folder is present.")
+
+    transform = T.Compose(
+        [
+            T.RandomResize([800], max_size=1333),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
+    image, _ = transform(image_pil, None)  # 3, h, w
+    return image
+
+# (modified for SDPose context)
+def groundingdino_predict(dino_model_wrapper, image_pil, prompt, threshold):
+    dino_model = dino_model_wrapper["model"] # Extract the actual model
+    
+    # (nested function)
+    def get_grounding_output(model, image, caption, box_threshold, device):
+        caption = caption.lower().strip()
+        if not caption.endswith("."):
+            caption = caption + "."
+            
+        # Move model to device just before inference
+        model.to(device)
+        image = image.to(device)
+        
+        boxes_filt = torch.tensor([]) # Initialize empty tensor
+        try:
+            with torch.no_grad():
+                outputs = model(image[None], captions=[caption])
+            
+            logits = outputs["pred_logits"].sigmoid()[0]  # (nq, 256)
+            boxes = outputs["pred_boxes"][0]  # (nq, 4) in cxcywh format
+            
+            # Filter output based on threshold
+            filt_mask = logits.max(dim=1)[0] > box_threshold
+            logits_filt = logits[filt_mask]  # num_filt, 256
+            boxes_filt = boxes[filt_mask]  # num_filt, 4
+            
+            # Convert boxes from cxcywh to xyxy format
+            boxes_filt = box_cxcywh_to_xyxy(boxes_filt)
+
+        except Exception as e:
+             print(f"SDPose Node: GroundingDINO inference failed: {e}")
+        finally:
+             # Move model back to CPU after inference to save VRAM
+             model.to("cpu")
+             model_management.soft_empty_cache() # Clean VRAM
+             
+        return boxes_filt.cpu() # Return results on CPU
+
+    # Helper function to convert box format
+    def box_cxcywh_to_xyxy(x):
+        x_c, y_c, w, h = x.unbind(1)
+        b = [(x_c - 0.5 * w), (y_c - 0.5 * h), (x_c + 0.5 * w), (y_c + 0.5 * h)]
+        return torch.stack(b, dim=1)
+        
+    # --- Main prediction logic ---
+    dino_image = load_dino_image(image_pil.convert("RGB"))
+    
+    # Use ComfyUI's device management
+    device = model_management.get_torch_device()
+    
+    boxes_filt_norm = get_grounding_output(dino_model, dino_image, prompt, threshold, device)
+    
+    # If no boxes found, return empty list
+    if boxes_filt_norm.shape[0] == 0:
+        return []
+        
+    # Scale boxes to original image size
+    H, W = image_pil.size[1], image_pil.size[0]
+    boxes_filt_abs = boxes_filt_norm * torch.Tensor([W, H, W, H])
+    
+    # Convert to list of lists format [[x1, y1, x2, y2], ...]
+    return boxes_filt_abs.tolist()
 
 # --- Processing functions (adapted from SDPose_gradio.py) ---
 # (Functions detect_person_yolo, preprocess_image_for_sdpose, restore_keypoints_to_original, convert_to_openpose_json are omitted for brevity but would be pasted here)
@@ -466,6 +550,129 @@ class SDPoseOODLoader:
         }
         return (sdpose_model,)
 
+
+# --- GroundingDINO Model Loader (Adapted from SAM2 Node) ---
+# (global groundingdino_model_list definition)
+groundingdino_model_dir_name = "grounding-dino"
+groundingdino_model_list = {
+    "GroundingDINO_SwinT_OGC (694MB)": {
+        "config_url": "https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/GroundingDINO_SwinT_OGC.cfg.py",
+        "model_url": "https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swint_ogc.pth",
+    },
+    "GroundingDINO_SwinB (938MB)": {
+        "config_url": "https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/GroundingDINO_SwinB.cfg.py",
+        "model_url": "https://huggingface.co/ShilongLiu/GroundingDINO/resolve/main/groundingdino_swinb_cogcoor.pth",
+    },
+}
+
+#
+def list_groundingdino_model():
+    return list(groundingdino_model_list.keys())
+
+#
+def get_bert_base_uncased_model_path():
+    # Reuse ComfyUI's standard CLIP model directory structure if available
+    clip_model_base = os.path.join(folder_paths.models_dir, "clip")
+    bert_path = os.path.join(clip_model_base, "bert-base-uncased")
+    if os.path.exists(bert_path) and os.path.isdir(bert_path):
+         # Check specifically for pytorch_model.bin or model.safetensors
+         has_bin = os.path.exists(os.path.join(bert_path, "pytorch_model.bin"))
+         has_safe = os.path.exists(os.path.join(bert_path, "model.safetensors"))
+         if has_bin or has_safe:
+             print("SDPose Node (GroundingDINO): Using bert-base-uncased from models/clip folder")
+             return bert_path
+             
+    # Fallback for ComfyUI < 1.14 or custom bert model path
+    comfy_bert_model_base = os.path.join(folder_paths.models_dir, "bert-base-uncased")
+    if glob.glob(os.path.join(comfy_bert_model_base, "**/model.safetensors"), recursive=True) or \
+       glob.glob(os.path.join(comfy_bert_model_base, "**/pytorch_model.bin"), recursive=True):
+        print("SDPose Node (GroundingDINO): Using models/bert-base-uncased")
+        return comfy_bert_model_base
+        
+    print("SDPose Node (GroundingDINO): Using HuggingFace Hub for bert-base-uncased")
+    return "bert-base-uncased" # Default fallback to HF Hub download
+
+#
+def get_local_filepath(url, dirname, local_file_name=None):
+    if not local_file_name:
+        from urllib.parse import urlparse # Local import
+        parsed_url = urlparse(url)
+        local_file_name = os.path.basename(parsed_url.path)
+
+    destination = folder_paths.get_full_path(dirname, local_file_name)
+    if destination and os.path.exists(destination): # Check existence
+        # print(f"SDPose Node: Using extra model path: {destination}") # Reduce noise
+        return destination
+
+    folder = os.path.join(folder_paths.models_dir, dirname)
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    destination = os.path.join(folder, local_file_name)
+    if not os.path.exists(destination):
+        from torch.hub import download_url_to_file # Local import
+        print(f"SDPose Node: Downloading {url} to {destination}")
+        download_url_to_file(url, destination)
+    return destination
+
+# (modified for SDPose context)
+def load_groundingdino_model(model_name):
+    # Need imports from local_groundingdino here
+    try:
+        from .local_groundingdino.util.slconfig import SLConfig as local_groundingdino_SLConfig
+        from .local_groundingdino.models import build_model as local_groundingdino_build_model
+        from .local_groundingdino.util.utils import clean_state_dict as local_groundingdino_clean_state_dict
+        import glob # For checking bert path
+    except ImportError:
+         raise ImportError("SDPose Node: Failed to import local_groundingdino. Please ensure the 'local_groundingdino' folder is present in the node directory.")
+
+    dino_model_args = local_groundingdino_SLConfig.fromfile(
+        get_local_filepath(
+            groundingdino_model_list[model_name]["config_url"],
+            groundingdino_model_dir_name,
+        ),
+    )
+
+    if dino_model_args.text_encoder_type == "bert-base-uncased":
+        dino_model_args.text_encoder_type = get_bert_base_uncased_model_path()
+
+    dino = local_groundingdino_build_model(dino_model_args)
+    checkpoint = torch.load(
+        get_local_filepath(
+            groundingdino_model_list[model_name]["model_url"],
+            groundingdino_model_dir_name,
+        ), map_location="cpu" # Load to CPU first
+    )
+    dino.load_state_dict(
+        local_groundingdino_clean_state_dict(checkpoint["model"]), strict=False
+    )
+    # Don't move to device here, let the Processor node handle it if needed
+    dino.eval()
+    return dino
+
+# (modified for SDPose context)
+class GroundingDinoModelLoader_SDPose:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_name": (list_groundingdino_model(),),
+            }
+        }
+
+    CATEGORY = "SDPose" # Match SDPose category
+    FUNCTION = "main"
+    RETURN_TYPES = ("GROUNDING_DINO_MODEL",)
+
+    def main(self, model_name):
+        dino_model = load_groundingdino_model(model_name)
+        # Wrap in a dictionary for potential future extensions
+        gd_model_wrapper = {
+            "model": dino_model,
+            "model_name": model_name,
+        }
+        return (gd_model_wrapper,)
+
 class SDPoseOODProcessor:
     """
     ComfyUI node to run SDPose inference using true parallel batching.
@@ -493,15 +700,22 @@ class SDPoseOODProcessor:
             "required": {
                 "sdpose_model": ("SDPOSE_MODEL",),
                 "images": ("IMAGE",),
-                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}),
+                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}), # Pose threshold
                 "overlay_alpha": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
-                # 替换 'process_batch' 为 'batch_size'
                 "batch_size": ("INT", {"default": 8, "min": 1, "max": 64}),
             },
             "optional": {
+                "data_from_florence2": ("JSON",),
+                "grounding_dino_model": ("GROUNDING_DINO_MODEL",),
+                "prompt": ("STRING", {"default": "person .", "multiline": False}),
+                "gd_threshold": ("FLOAT", {"default": 0.3, "min": 0, "max": 1.0, "step": 0.01}),
                 "yolo_model": ("YOLO_MODEL",),
                 "save_for_editor": ("BOOLEAN", {"default": False}),
                 "filename_prefix_edit": ("STRING", {"default": "poses/pose_edit"}),
+                # --- 添加新选项 ---
+                "keep_face": ("BOOLEAN", {"default": True, "label_on": "Keep Face", "label_off": "Remove Face"}),
+                "keep_hands": ("BOOLEAN", {"default": True, "label_on": "Keep Hands", "label_off": "Remove Hands"}),
+                "keep_feet": ("BOOLEAN", {"default": True, "label_on": "Keep Feet", "label_off": "Remove Feet"}),
             }
         }
 
@@ -510,8 +724,25 @@ class SDPoseOODProcessor:
     FUNCTION = "process_sequence"
     CATEGORY = "SDPose"
 
-    def process_sequence(self, sdpose_model, images, score_threshold, overlay_alpha, batch_size=8, yolo_model=None, save_for_editor=False, filename_prefix_edit="poses/pose_edit"):
-        
+    def process_sequence(
+        self,
+        sdpose_model,
+        images,
+        score_threshold,
+        overlay_alpha,
+        batch_size=8,
+        grounding_dino_model=None,
+        prompt="person .",
+        gd_threshold=0.3,
+        yolo_model=None,
+        save_for_editor=False,
+        filename_prefix_edit="poses/pose_edit",
+        data_from_florence2=None,
+        keep_face=True,
+        keep_hands=True,
+        keep_feet=True
+    ):
+
         device = sdpose_model["device"]
         keypoint_scheme = sdpose_model["keypoint_scheme"]
         input_size = (768, 1024)
@@ -575,34 +806,140 @@ class SDPoseOODProcessor:
 
         pipeline = MockPipeline(sdpose_model)
 
-        # --- 步骤 1: 收集 (YOLO 检测和预处理) ---
-        print("SDPose Node: Stage 1/3 - Detecting persons...")
+        # --- 步骤 1: 收集 (YOLO/GD/F2 检测和预处理) ---
+        print("SDPose Node: Stage 1/3 - Detecting/Collecting persons...")
         all_jobs = [] # 存储所有待处理的人
         
+        # --- 解析 Florence2 数据 (如果提供) ---
+        input_bboxes_per_frame_f2 = [None] * B # 初始化 Florence2 的 BBox 列表
+        used_florence2 = False
+        if data_from_florence2 is not None:
+            try:
+                # 检查 data_from_florence2 是否是列表且长度与帧数匹配
+                if isinstance(data_from_florence2, list) and len(data_from_florence2) == B:
+                    valid_f2_data = True
+                    parsed_bboxes_list = []
+                    for i, frame_data in enumerate(data_from_florence2):
+                        # 检查每个元素是否是字典且包含 'bboxes' 键
+                        if isinstance(frame_data, dict) and 'bboxes' in frame_data and isinstance(frame_data['bboxes'], list):
+                            # 确保转换为 list[list[float]] 格式
+                            # Florence2 bbox 可能是 [x0, y0, x1, y1]
+                            bboxes_for_frame = [list(map(float, box)) for box in frame_data['bboxes'] if len(box) == 4]
+                            parsed_bboxes_list.append(bboxes_for_frame)
+                        else:
+                            # 允许空列表或None表示该帧无检测
+                            if frame_data is None or (isinstance(frame_data, dict) and not frame_data.get('bboxes')):
+                                parsed_bboxes_list.append([]) # 该帧无bbox
+                            else:
+                                if i == 0: print(f"SDPose Node: Warning - Invalid format in data_from_florence2 for frame {i}. Expected dict with 'bboxes' list.")
+                                valid_f2_data = False
+                                break # 格式不匹配，放弃使用
+                    
+                    if valid_f2_data:
+                         input_bboxes_per_frame_f2 = parsed_bboxes_list
+                         used_florence2 = True
+                         print("SDPose Node: Using BBoxes provided by Florence2.")
+                else:
+                    print(f"SDPose Node: Warning - data_from_florence2 format mismatch (expected list of length {B}). Falling back.")
+
+            except Exception as e:
+                print(f"SDPose Node: Warning - Failed to parse data_from_florence2: {e}. Falling back.")
+        # --- Florence2 解析结束 ---
+
+        # --- 循环处理每一帧 ---
         for frame_idx in range(B):
             original_image_rgb = (images_np[frame_idx] * 255).astype(np.uint8)
             original_image_bgr = cv2.cvtColor(original_image_rgb, cv2.COLOR_RGB2BGR)
+            H, W = original_image_rgb.shape[:2] # 获取当前帧的 H, W
 
-            if yolo_model is not None and YOLO_AVAILABLE:
-                results = yolo_model(original_image_bgr, verbose=False)
-                bboxes = []
-                for result in results:
-                    if result.boxes is not None:
-                        for box in result.boxes:
-                            if int(box.cls[0]) == 0 and float(box.conf[0]) > 0.5:
-                                bboxes.append(box.xyxy[0].cpu().numpy().tolist())
-                if not bboxes:
-                    bboxes = [[0, 0, W, H]] # 无检测, 处理全图
-            else:
-                bboxes = [[0, 0, W, H]] # 无YOLO, 处理全图
+            bboxes = [] # 初始化空列表
+            detection_source = "None"
+
+            # 优先级 1: Florence2 (如果成功解析)
+            if used_florence2 and input_bboxes_per_frame_f2[frame_idx] is not None:
+                bboxes = input_bboxes_per_frame_f2[frame_idx]
+                detection_source = "Florence2"
+                # if frame_idx == 0 and not bboxes: print("SDPose Node: Florence2 provided no bboxes for the first frame.") # 减少噪音
             
-            for person_idx, bbox in enumerate(bboxes):
-                input_tensor, _, crop_info = preprocess_image_for_sdpose(original_image_bgr, bbox, input_size)
-                # input_tensor 仍在CPU上，我们只收集作业
-                all_jobs.append(self.DetectionJob(frame_idx, person_idx, input_tensor, crop_info))
+            # 优先级 2: GroundingDINO (如果F2未使用或未找到)
+            if not bboxes and grounding_dino_model is not None:
+                if prompt and prompt.strip():
+                    try:
+                        pil_image = Image.fromarray(original_image_rgb)
+                        if frame_idx == 0: print(f"SDPose Node: Using GroundingDINO with prompt: '{prompt}' and threshold: {gd_threshold}")
+                        gd_bboxes = groundingdino_predict(grounding_dino_model, pil_image, prompt, gd_threshold)
+                        if gd_bboxes:
+                            bboxes = gd_bboxes
+                            detection_source = "GroundingDINO"
+                        elif frame_idx == 0: print("SDPose Node: GroundingDINO found no objects matching the prompt.")
+                    except Exception as e:
+                        print(f"SDPose Node: Error during GroundingDINO prediction for frame {frame_idx}: {e}")
+                elif frame_idx == 0:
+                    print("SDPose Node Warning: GroundingDINO model provided, but prompt is empty. Skipping GroundingDINO.")
 
+            # 优先级 3: YOLO (如果F2和GD都未使用或未找到)
+            if not bboxes and yolo_model is not None and YOLO_AVAILABLE:
+                try:
+                    if frame_idx == 0: print("SDPose Node: Using YOLO for person detection.")
+                    results = yolo_model(original_image_bgr, verbose=False)
+                    yolo_bboxes = []
+                    for result in results:
+                        if result.boxes is not None:
+                            for box in result.boxes:
+                                if int(box.cls[0]) == 0 and float(box.conf[0]) > 0.5: # Class 0 is person
+                                    yolo_bboxes.append(box.xyxy[0].cpu().numpy().tolist())
+                    if yolo_bboxes:
+                         bboxes = yolo_bboxes
+                         detection_source = "YOLO"
+                    elif frame_idx == 0: 
+                         print("SDPose Node: YOLO found no persons.")
+                except Exception as e:
+                     print(f"SDPose Node: Error during YOLO prediction for frame {frame_idx}: {e}")
+
+            # 优先级 4: Full Image (如果前面都没有检测结果)
+            if not bboxes:
+                if detection_source == "None": # 只有在完全没有尝试检测时才打印这个
+                    if frame_idx == 0: print("SDPose Node: No detector specified. Processing full image.")
+                elif frame_idx == 0: # 如果尝试了但没找到
+                    print(f"SDPose Node: {detection_source} found no objects. Processing full image for frame 0.")
+                
+                bboxes = [[0, 0, W, H]]
+                detection_source = "Full Image"
+            elif frame_idx == 0: # 如果找到了，打印来源
+                 print(f"SDPose Node: Using bboxes from {detection_source} for frame 0.")
+                 
+            # --- 后续的 preprocess_image_for_sdpose 和 all_jobs.append 逻辑 ---
+            # (注意: 这里是循环处理当前帧的所有 bbox)
+            if not bboxes: # 再次检查，以防万一
+                print(f"SDPose Node: Warning - No bboxes available for frame {frame_idx}, skipping.")
+                continue # 跳过这一帧的处理
+
+            for person_idx, bbox in enumerate(bboxes):
+                 # 确保 bbox 是有效的 [x1, y1, x2, y2]
+                 if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+                     print(f"SDPose Node: Warning - Invalid bbox format for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.")
+                     continue
+                     
+                 # 确保坐标是数值类型
+                 try:
+                     bbox = [float(coord) for coord in bbox]
+                 except (ValueError, TypeError):
+                     print(f"SDPose Node: Warning - Non-numeric bbox coordinates for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.")
+                     continue
+                 
+                 # 检查 bbox 是否有效 (x2 > x1 and y2 > y1)
+                 x1, y1, x2, y2 = bbox
+                 if not (x2 > x1 and y2 > y1):
+                     # print(f"SDPose Node: Warning - Invalid bbox dimensions for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.") # 可能过于冗余
+                     continue
+                     
+                 input_tensor, _, crop_info = preprocess_image_for_sdpose(original_image_bgr, bbox, input_size)
+                 all_jobs.append(self.DetectionJob(frame_idx, person_idx, input_tensor, crop_info))
+
+            # Update progress (Stage 1)
             progress += 1
             if comfy_pbar: comfy_pbar.update_absolute(progress)
+            
 
         total_detections = len(all_jobs)
         print(f"SDPose Node: Stage 1 complete. Found {total_detections} total persons in {B} frames.")
@@ -657,17 +994,19 @@ class SDPoseOODProcessor:
             )
             scores = job.scores
             
-            # 应用 133 -> 134 点转换
+            # 应用 133 -> 134 点转换 和 部位移除逻辑
             if keypoint_scheme == "body":
                 kpts_final = kpts_original
                 scores_final = scores
+                # 绘制 body (使用 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_body17_keypoints_openpose_style(
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, threshold=score_threshold
                 )
+            
             else: # wholebody
                 kpts_final = kpts_original.copy()
                 scores_final = scores.copy()
-                if len(kpts_original) >= 17:
+                if len(kpts_original) >= 17: # 执行 133 -> 134 转换
                     neck = (kpts_original[5] + kpts_original[6]) / 2
                     neck_score = min(scores[5], scores[6]) if scores[5] > 0.3 and scores[6] > 0.3 else 0
                     kpts_final = np.insert(kpts_original, 17, neck, axis=0)
@@ -683,12 +1022,34 @@ class SDPoseOODProcessor:
                     
                     kpts_final = temp_kpts
                     scores_final = temp_scores
-                
+
+                # --- 新增：根据选项零化特定部位 (仅对 wholebody 有效) ---
+                # 确保数组长度足够 (至少134点)
+                if len(kpts_final) >= 134 and len(scores_final) >= 134:
+                    if not keep_face:
+                        # Face: Indices 24-91
+                        kpts_final[24:92] = 0.0
+                        scores_final[24:92] = 0.0
+                    if not keep_hands:
+                        # Right Hand: Indices 92-112
+                        kpts_final[92:113] = 0.0
+                        scores_final[92:113] = 0.0
+                        # Left Hand: Indices 113-133
+                        kpts_final[113:134] = 0.0
+                        scores_final[113:134] = 0.0
+                    if not keep_feet:
+                        # Foot: Indices 18-23
+                        kpts_final[18:24] = 0.0
+                        scores_final[18:24] = 0.0
+                # --- 零化逻辑结束 ---
+
+                # 绘制 wholebody (使用可能已被修改的 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_wholebody_keypoints_openpose_style(
-                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, threshold=score_threshold
+                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
+                    threshold=score_threshold
                 )
             
-            # 存储该人的姿态数据
+            # 存储该人的姿态数据 (可能已被修改)
             frame_data[frame_idx]["all_keypoints"].append(kpts_final)
             frame_data[frame_idx]["all_scores"].append(scores_final)
         
@@ -762,10 +1123,12 @@ NODE_CLASS_MAPPINGS = {
     "SDPoseOODLoader": SDPoseOODLoader,
     "SDPoseOODProcessor": SDPoseOODProcessor,
     "YOLOModelLoader": YOLOModelLoader,
+    "GroundingDinoModelLoader_SDPose": GroundingDinoModelLoader_SDPose, # 添加这一行
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SDPoseOODLoader": "Load SDPose Model",
     "SDPoseOODProcessor": "Run SDPose Estimation",
     "YOLOModelLoader": "Load YOLO Model",
+    "GroundingDinoModelLoader_SDPose": "Load GroundingDINO Model (SDPose)", # 添加这一行
 }
