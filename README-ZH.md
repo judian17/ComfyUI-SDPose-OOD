@@ -1,4 +1,4 @@
-[![English README]](README-EN.md)
+[![English README]](README.md)
 
 # SDPose-OOD for ComfyUI
 
