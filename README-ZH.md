@@ -1,4 +1,4 @@
-[![English README]](README.md)
+[[English README]](README.md)
 
 # SDPose-OOD for ComfyUI
 
@@ -15,7 +15,7 @@
     * **WholeBody**: 133 个关键点，包括身体、面部和手部。
 * **自动模型下载**: 节点在首次使用时会自动下载所需的模型。
 * **YOLO 集成**: 可选的 YOLO 人物检测，用于精确的多人姿态估计。
-* **高级 BBox 检测**: 除了 YOLO，现在还支持使用 **ComfyUI-Florence2** (https://github.com/kijai/ComfyUI-Florence2) 或 **GroundingDINO** (来自 ComfyUI-SAM2: https://github.com/neverbiasu/ComfyUI-SAM2) 进行精确的人物检测。
+* **高级 BBox 检测**: 除了 YOLO，现在还支持使用 **ComfyUI-Florence2** (https://github.com/kijai/ComfyUI-Florence2) 或 **GroundingDINO** (来自 ComfyUI-SAM2): (https://github.com/neverbiasu/ComfyUI-SAM2) 进行精确的人物检测。
 * **关键点过滤**: 可选保留或移除面部、手部和脚部的关键点，以适应不同需求。
 * **精度控制**: 支持 `bf16`, `fp16` 和 `fp32` 推理，以平衡速度和显存占用。
 * **OpenPose 编辑器兼容**: 可一键保存姿态为 JSON 文件，用于在 [ComfyUI-OpenPose-Editor](https://github.com/judian17/ComfyUI-OpenPose-Editor-jd) 中导入和编辑。
@@ -45,7 +45,6 @@
 
 3.  **安装可选依赖 (用于高级 BBox 检测)**:
     * 如需使用 Florence2，请安装 [ComfyUI-Florence2](https://github.com/kijai/ComfyUI-Florence2)。
-    * 如需使用 GroundingDINO，请安装 [ComfyUI-SAM2](https://github.com/neverbiasu/ComfyUI-SAM2) (代码来源于此)。
 
 ## 节点说明
 
@@ -76,7 +75,7 @@
 * **`score_threshold`**: 关键点置信度阈值。低于此分数的点将被忽略。
 * **`keep_face` (布尔值)**: `True` 则保留面部关键点 (仅 `WholeBody` 有效)。
 * **`keep_hands` (布尔值)**: `True` 则保留手部关键点 (仅 `WholeBody` 有效)。
-* **`keep_feet` (布尔值)**: `True` 则保留脚部关键点。
+* **`keep_feet` (布尔值)**: `True` 则保留脚部关键点(仅 `WholeBody` 有效)。
 * **`overlay_alpha`**: 控制输出图像的可见度。
     * `0.0`: 100% 原始图像。
     * `0.6`: 原始图像与姿态图的混合（原图亮度60%）。
@@ -91,7 +90,7 @@
 
 ## 工作流示例
 
-![workflow](./workflow/sdpose_ood.json)
+[workflow](./workflow/sdpose_ood.json)
 
 ![Example](./example.png)
 
