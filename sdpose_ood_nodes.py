@@ -122,7 +122,7 @@ def numpy_to_tensor(img_np):
 
 # --- Drawing functions (copied from SDPose_gradio.py) ---
 # (Functions draw_body17_keypoints_openpose_style and draw_wholebody_keypoints_openpose_style are omitted for brevity but would be pasted here)
-def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6):
+def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False):
     H, W, C = canvas.shape
     if len(keypoints) >= 7:
         neck = (keypoints[5] + keypoints[6]) / 2
@@ -133,7 +133,21 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
         if scores is not None:
             candidate_scores[0] = scores[0]; candidate_scores[1] = neck_score; candidate_scores[2] = scores[6]; candidate_scores[3] = scores[8]; candidate_scores[4] = scores[10]; candidate_scores[5] = scores[5]; candidate_scores[6] = scores[7]; candidate_scores[7] = scores[9]; candidate_scores[8] = scores[12]; candidate_scores[9] = scores[14]; candidate_scores[10] = scores[16]; candidate_scores[11] = scores[11]; candidate_scores[12] = scores[13]; candidate_scores[13] = scores[15]; candidate_scores[14] = scores[2]; candidate_scores[15] = scores[1]; candidate_scores[16] = scores[4]; candidate_scores[17] = scores[3]
     else: return canvas
-    avg_size = (H + W) / 2; stickwidth = max(1, int(avg_size / 256)); circle_radius = max(2, int(avg_size / 192))
+    # --- 计算基础粗细 ---
+    avg_size = (H + W) / 2
+    base_stickwidth = max(1, int(avg_size / 256))
+    circle_radius = max(2, int(avg_size / 192))
+    stickwidth = base_stickwidth # 默认值
+
+    # --- 应用 xinsr 缩放 ---
+    if scale_for_xinsr:
+        target_max_side = max(H, W) # 使用图像最大边长
+        # 借用 OpenPose Editor 的公式
+        xinsr_stick_scale = 1 if target_max_side < 500 else min(2 + (target_max_side // 1000), 7) 
+        stickwidth = base_stickwidth * xinsr_stick_scale
+        print(f"SDPose Node: Applying Xinsr scale ({xinsr_stick_scale:.1f}) to stickwidth. New width: {stickwidth}") # Debug print
+        
+
     limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
     for i in range(len(limbSeq)):
@@ -153,8 +167,20 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
         cv2.circle(canvas, (x, y), circle_radius, colors[i % len(colors)], thickness=-1)
     return canvas
 
-def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6):
-    H, W, C = canvas.shape; stickwidth = 4
+def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False):
+    H, W, C = canvas.shape
+    # --- 计算基础粗细 (使用固定值4作为基准) ---
+    base_stickwidth = 4 
+    stickwidth = base_stickwidth # 默认值
+
+    # --- 应用 xinsr 缩放 ---
+    if scale_for_xinsr:
+        target_max_side = max(H, W) # 使用图像最大边长
+        # 借用 OpenPose Editor 的公式
+        xinsr_stick_scale = 1 if target_max_side < 500 else min(2 + (target_max_side // 1000), 7)
+        stickwidth = base_stickwidth * xinsr_stick_scale
+        print(f"SDPose Node: Applying Xinsr scale ({xinsr_stick_scale:.1f}) to stickwidth. New width: {stickwidth}") # Debug print
+
     body_limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     hand_edges = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], [0, 17], [17, 18], [18, 19], [19, 20]]
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
@@ -716,7 +742,9 @@ class SDPoseOODProcessor:
                 "keep_face": ("BOOLEAN", {"default": True, "label_on": "Keep Face", "label_off": "Remove Face"}),
                 "keep_hands": ("BOOLEAN", {"default": True, "label_on": "Keep Hands", "label_off": "Remove Hands"}),
                 "keep_feet": ("BOOLEAN", {"default": True, "label_on": "Keep Feet", "label_off": "Remove Feet"}),
+                "scale_for_xinsr": ("BOOLEAN", {"default": False, "label_on": "Xinsr CN Scale", "label_off": "Default Scale"}),
             }
+            
         }
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -740,7 +768,8 @@ class SDPoseOODProcessor:
         data_from_florence2=None,
         keep_face=True,
         keep_hands=True,
-        keep_feet=True
+        keep_feet=True,
+        scale_for_xinsr=False
     ):
 
         device = sdpose_model["device"]
@@ -1000,7 +1029,9 @@ class SDPoseOODProcessor:
                 scores_final = scores
                 # 绘制 body (使用 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_body17_keypoints_openpose_style(
-                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, threshold=score_threshold
+                    frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
+                    threshold=score_threshold,
+                    scale_for_xinsr=scale_for_xinsr # 添加这一行
                 )
             
             else: # wholebody
@@ -1046,7 +1077,8 @@ class SDPoseOODProcessor:
                 # 绘制 wholebody (使用可能已被修改的 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_wholebody_keypoints_openpose_style(
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
-                    threshold=score_threshold
+                    threshold=score_threshold,
+                    scale_for_xinsr=scale_for_xinsr
                 )
             
             # 存储该人的姿态数据 (可能已被修改)
