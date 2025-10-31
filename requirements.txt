@@ -10,7 +10,7 @@ https://archive1.piwheels.org/simple/mmcv/mmcv-2.1.0-py2.py3-none-any.whl#sha256
 mmdet
 mmengine
 munkres
-numpy<=1.26.4
+numpy
 opencv-python>=4.7.0
 pandas
 safetensors
