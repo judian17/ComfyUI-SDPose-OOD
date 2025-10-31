@@ -727,7 +727,7 @@ class SDPoseOODProcessor:
                 "sdpose_model": ("SDPOSE_MODEL",),
                 "images": ("IMAGE",),
                 "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}), # Pose threshold
-                "overlay_alpha": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "overlay_alpha": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
             },
             "optional": {

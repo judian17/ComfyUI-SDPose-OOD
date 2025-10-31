@@ -35,12 +35,12 @@ class BaseHead(BaseModule, metaclass=ABCMeta):
                 test_cfg: OptConfigType = {}) -> Predictions:
         """Predict results from features."""
 
-    @abstractmethod
     def loss(self,
              feats: Tuple[Tensor],
              batch_data_samples: OptSampleList,
              train_cfg: OptConfigType = {}) -> dict:
         """Calculate losses from a batch of inputs and data samples."""
+        pass # <--- 在这里添加 pass
 
     def decode(self, batch_outputs: Union[Tensor,
                                           Tuple[Tensor]]) -> InstanceList:

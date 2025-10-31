@@ -11,10 +11,10 @@ from mmcv.cnn import build_conv_layer, build_upsample_layer
 from mmengine.structures import PixelData
 from torch import Tensor, nn
 
-from mmpose.evaluation.functional import pose_pck_accuracy
+
 from mmpose.models.utils.tta import flip_heatmaps
 from mmpose.registry import KEYPOINT_CODECS, MODELS
-from mmpose.utils.tensor_utils import to_numpy
+
 from mmpose.utils.typing import (ConfigType, Features, OptConfigType,
                                  OptSampleList, Predictions)
 from ..base_head import BaseHead
@@ -82,7 +82,7 @@ class HeatmapHead(BaseHead):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.loss_module = MODELS.build(loss)
+        
         if decoder is not None:
             self.decoder = KEYPOINT_CODECS.build(decoder)
         else:
@@ -297,46 +297,7 @@ class HeatmapHead(BaseHead):
         else:
             return preds
 
-    def loss(self,
-             feats: Tuple[Tensor],
-             batch_data_samples: OptSampleList,
-             train_cfg: ConfigType = {}) -> dict:
-        """Calculate losses from a batch of inputs and data samples.
 
-        Args:
-            feats (Tuple[Tensor]): The multi-stage features
-            batch_data_samples (List[:obj:`PoseDataSample`]): The batch
-                data samples
-            train_cfg (dict): The runtime config for training process.
-                Defaults to {}
-
-        Returns:
-            dict: A dictionary of losses.
-        """
-        pred_fields = self.forward(feats)
-        gt_heatmaps = torch.stack(
-            [d.gt_fields.heatmaps for d in batch_data_samples])
-        keypoint_weights = torch.cat([
-            d.gt_instance_labels.keypoint_weights for d in batch_data_samples
-        ])
-
-        # calculate losses
-        losses = dict()
-        loss = self.loss_module(pred_fields, gt_heatmaps, keypoint_weights)
-
-        losses.update(loss_kpt=loss)
-
-        # calculate accuracy
-        if train_cfg.get('compute_acc', True):
-            _, avg_acc, _ = pose_pck_accuracy(
-                output=to_numpy(pred_fields),
-                target=to_numpy(gt_heatmaps),
-                mask=to_numpy(keypoint_weights) > 0)
-
-            acc_pose = torch.tensor(avg_acc, device=gt_heatmaps.device)
-            losses.update(acc_pose=acc_pose)
-
-        return losses, pred_fields
 
     def _load_state_dict_pre_hook(self, state_dict, prefix, local_meta, *args,
                                   **kwargs):
