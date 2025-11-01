@@ -240,9 +240,9 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
 def load_dino_image(image_pil):
     # Need import from local_groundingdino here
     try:
-        from .local_groundingdino.datasets import transforms as T
+        from groundingdino.datasets import transforms as T
     except ImportError:
-         raise ImportError("SDPose Node: Failed to import local_groundingdino transforms. Please ensure the 'local_groundingdino' folder is present.")
+        raise ImportError("SDPose Node: Failed to import 'groundingdino'. Please install it via pip: 'pip install groundingdino-py'")
 
     transform = T.Compose(
         [
@@ -645,12 +645,12 @@ def get_local_filepath(url, dirname, local_file_name=None):
 def load_groundingdino_model(model_name):
     # Need imports from local_groundingdino here
     try:
-        from .local_groundingdino.util.slconfig import SLConfig as local_groundingdino_SLConfig
-        from .local_groundingdino.models import build_model as local_groundingdino_build_model
-        from .local_groundingdino.util.utils import clean_state_dict as local_groundingdino_clean_state_dict
+        from groundingdino.util.slconfig import SLConfig as local_groundingdino_SLConfig
+        from groundingdino.models import build_model as local_groundingdino_build_model
+        from groundingdino.util.utils import clean_state_dict as local_groundingdino_clean_state_dict
         import glob # For checking bert path
     except ImportError:
-         raise ImportError("SDPose Node: Failed to import local_groundingdino. Please ensure the 'local_groundingdino' folder is present in the node directory.")
+        raise ImportError("SDPose Node: Failed to import 'groundingdino'. Please install it via pip: 'pip install groundingdino-py'")
 
     dino_model_args = local_groundingdino_SLConfig.fromfile(
         get_local_filepath(
