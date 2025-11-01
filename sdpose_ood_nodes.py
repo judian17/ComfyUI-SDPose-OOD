@@ -430,26 +430,103 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
 
 def convert_to_openpose_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body"):
     people = []
-    for keypoints, scores in zip(all_keypoints, all_scores):
+    
+    # 安全检查，防止除以零
+    if image_width == 0 or image_height == 0:
+        print("SDPose Node: Warning - image_width or image_height is zero, cannot normalize. Returning empty pose.")
+        return {"people": [], "canvas_width": int(image_width), "canvas_height": int(image_height)}
+
+    for person_idx, (keypoints, scores) in enumerate(zip(all_keypoints, all_scores)):
         person_data = {}
+        
         if keypoint_scheme == "body":
-            # Body only: 17 keypoints
-            pose_kpts = [v for i in range(min(17, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
-            person_data["pose_keypoints_2d"] = pose_kpts
-        else: # wholebody - 期望 134 点输入
-            # Body: 0-17 (18 keypoints including neck at index 17)
-            pose_kpts = [v for i in range(min(18, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
-            # Foot: 18-23 (6 keypoints)
-            foot_kpts = [v for i in range(18, min(24, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
-            # Face: 24-91 (68 keypoints)
-            face_kpts = [v for i in range(24, min(92, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
-            # Right hand: 92-112 (21 keypoints)
-            right_hand_kpts = [v for i in range(92, min(113, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
-            # Left hand: 113-133 (21 keypoints)
-            left_hand_kpts = [v for i in range(113, min(134, len(keypoints))) for v in [float(keypoints[i, 0]), float(keypoints[i, 1]), float(scores[i])]]
+            # --- COCO-17 -> OP-18 转换逻辑 ---
+            if len(keypoints) < 17 or len(scores) < 17:
+                print(f"SDPose Node: Skipping person {person_idx} in convert_to_openpose_json due to incomplete keypoints (expected 17, got {len(keypoints)})")
+                continue 
+
+            neck = (keypoints[5] + keypoints[6]) / 2 
+            neck_score = min(scores[5], scores[6])
+
+            op_keypoints = np.zeros((18, 2))
+            op_scores = np.zeros(18)
             
-            person_data.update({"pose_keypoints_2d": pose_kpts, "foot_keypoints_2d": foot_kpts, "face_keypoints_2d": face_kpts, "hand_right_keypoints_2d": right_hand_kpts, "hand_left_keypoints_2d": left_hand_kpts})
+            coco_to_op_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
+            
+            for i_op in range(18):
+                if i_op == 1: 
+                    op_keypoints[i_op] = neck
+                    op_scores[i_op] = neck_score
+                else:
+                    i_coco = coco_to_op_map[i_op]
+                    if i_coco < 0 or i_coco >= len(keypoints): continue 
+                    op_keypoints[i_op] = keypoints[i_coco]
+                    op_scores[i_op] = scores[i_coco]
+            
+            # --- 最终修复：扁平化、标准化、并将分数设为 1.0 ---
+            pose_kpts_18 = []
+            for i in range(18):
+                x, y = op_keypoints[i, 0], op_keypoints[i, 1]
+                s = float(op_scores[i])
+                
+                # SCORE FIX: 检查一个合理的阈值 (例如 0.1)，
+                # 如果通过，则报告 1.0，否则报告 0.0。
+                if s < 0.1: 
+                    pose_kpts_18.extend([0.0, 0.0, 0.0])
+                else:
+                    pose_kpts_18.extend([
+                        float(x) / float(image_width),  # 标准化 X
+                        float(y) / float(image_height), # 标准化 Y
+                        1.0  # <--- 修复：将置信度强制设为 1.0
+                    ])
+            # --- 修复结束 ---
+
+            person_data.update({
+                "pose_keypoints_2d": pose_kpts_18,
+                "foot_keypoints_2d": [],
+                "face_keypoints_2d": [],
+                "hand_right_keypoints_2d": [],
+                "hand_left_keypoints_2d": []
+            })
+
+        else: # wholebody - 期望 134 点输入
+            # --- 最终修复：扁平化、标准化、并将分数设为 1.0 ---
+            
+            def get_fixed_kpt(i):
+                if i >= len(keypoints) or i >= len(scores):
+                    return [0.0, 0.0, 0.0]
+                
+                x, y = keypoints[i, 0], keypoints[i, 1]
+                s = float(scores[i])
+                
+                # SCORE FIX: 检查一个合理的阈值
+                if s < 0.1:
+                    return [0.0, 0.0, 0.0]
+                
+                return [
+                    float(x) / float(image_width),  # 标准化 X
+                    float(y) / float(image_height), # 标准化 Y
+                    1.0  # <--- 修复：将置信度强制设为 1.0
+                ]
+
+            pose_kpts = [v for i in range(18) for v in get_fixed_kpt(i)]
+            foot_kpts = [v for i in range(18, 24) for v in get_fixed_kpt(i)]
+            face_kpts = [v for i in range(24, 92) for v in get_fixed_kpt(i)]
+            right_hand_kpts = [v for i in range(92, 113) for v in get_fixed_kpt(i)]
+            left_hand_kpts = [v for i in range(113, 134) for v in get_fixed_kpt(i)]
+            
+            # --- 修复结束 ---
+
+            person_data.update({
+                "pose_keypoints_2d": pose_kpts, 
+                "foot_keypoints_2d": foot_kpts, 
+                "face_keypoints_2d": face_kpts, 
+                "hand_right_keypoints_2d": right_hand_kpts, 
+                "hand_left_keypoints_2d": left_hand_kpts
+            })
+        
         people.append(person_data)
+        
     return {"people": people, "canvas_width": int(image_width), "canvas_height": int(image_height)}
 
 def _combine_frame_jsons(frame_jsons):
@@ -747,8 +824,8 @@ class SDPoseOODProcessor:
             
         }
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("images", "pose_jsons")
+    RETURN_TYPES = ("IMAGE", "POSE_KEYPOINT")
+    RETURN_NAMES = ("images", "pose_keypoint")
     FUNCTION = "process_sequence"
     CATEGORY = "SDPose"
 
@@ -1137,7 +1214,7 @@ class SDPoseOODProcessor:
         
         # --- 打包返回 ---
         result_tensor = torch.from_numpy(np.stack(result_images, axis=0).astype(np.float32) / 255.0)
-        combined_json = _combine_frame_jsons(all_frames_json_data)
+        # combined_json = _combine_frame_jsons(all_frames_json_data) # <-- 不再需要组合
         
         # --- 卸载模型 ---
         if sdpose_model.get("unload_on_finish", False):
@@ -1148,7 +1225,8 @@ class SDPoseOODProcessor:
                     sdpose_model[key].to(offload_device)
             model_management.soft_empty_cache()
 
-        return (result_tensor, combined_json)
+        # 直接返回帧列表 (all_frames_json_data)，这就是 POSE_KEYPOINT 格式
+        return (result_tensor, all_frames_json_data)
 
 # --- Node Mappings for ComfyUI ---
 NODE_CLASS_MAPPINGS = {
