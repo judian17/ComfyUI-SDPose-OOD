@@ -24,6 +24,7 @@ if IS_COMFYUI_ENV:
     logging.getLogger("transformers").setLevel(logging.ERROR)
     logging.getLogger("diffusers").setLevel(logging.ERROR)
 import os
+import re
 import torch
 import numpy as np
 from PIL import Image
@@ -60,8 +61,6 @@ except ImportError:
                 torch.cuda.empty_cache()
     model_management = MockModelManagement()
 
-# Add the project root to Python path to allow direct imports
-sys.path.append(str(Path(__file__).parent))
 
 # --- Imports from the original SDPose project ---
 # --- Imports from the original SDPose project ---
@@ -69,15 +68,22 @@ from diffusers import DDPMScheduler, AutoencoderKL, UNet2DConditionModel
 from transformers import CLIPTokenizer, CLIPTextModel
 
 # Try relative imports first, then absolute imports
+sys.path.append(str(Path(__file__).parent))
+# --- Imports from the original SDPose project ---
+# (We use absolute imports, enabled by sys.path.append on line 61)
 try:
-    from .models.HeatmapHead import get_heatmap_head
-    from .models.ModifiedUNet import Modified_forward
-    from .pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
-except ImportError:
-    # Fallback to absolute imports
     from models.HeatmapHead import get_heatmap_head
     from models.ModifiedUNet import Modified_forward
     from pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
+except ImportError as e:
+    print("="*50)
+    print("SDPose Node: CRITICAL ERROR")
+    print("Failed to import internal modules (e.g., models.HeatmapHead).")
+    print("This *almost always* means the 'models', 'pipelines', or 'mmpose' sub-folders are missing or installed incorrectly.")
+    print("Please ensure the node was installed completely (including all sub-folders).")
+    print(f"Original error: {e}")
+    print("="*50)
+    raise e # 重新抛出异常，让 ComfyUI 知道加载失败
 from safetensors.torch import load_file
 
 try:
@@ -1192,16 +1198,63 @@ class SDPoseOODProcessor:
                     )
                     
                     output_dir = folder_paths.get_output_directory()
-                    filename_with_frame = f"{filename_prefix_edit}_frame{frame_idx:06d}"
-                    full_output_folder, filename, _, _, _ = folder_paths.get_save_image_path(filename_with_frame, output_dir, W, H)
-                    
-                    os.makedirs(full_output_folder, exist_ok=True)
-                    # 简化文件名逻辑，不再检查计数器，直接覆盖
-                    final_filename = f"{filename}.json"
-                    file_path = os.path.join(full_output_folder, final_filename)
+                    is_batch = B > 1 # 检查是否为多帧
 
+                    if is_batch:
+                        # 批量（视频）逻辑：保持原样，使用 frame_idx
+                        filename_to_use = f"{filename_prefix_edit}_frame{frame_idx:06d}"
+                        full_output_folder, base_filename, _, _, _ = folder_paths.get_save_image_path(filename_to_use, output_dir, W, H)
+                        
+                        # 确保目录存在
+                        os.makedirs(full_output_folder, exist_ok=True)
+                        
+                        # 覆盖保存
+                        final_filename = f"{base_filename}.json"
+                        file_path = os.path.join(full_output_folder, final_filename)
+                        
+                    else:
+                        # --- 修复：单图逻辑，实现自定义JSON计数器 ---
+                        
+                        # 1. 解析基础路径和文件名前缀
+                        #    我们仍然使用 get_save_image_path 来智能处理子目录 (例如 'poses/pose_edit')
+                        full_output_folder, base_filename, _, _, _ = folder_paths.get_save_image_path(filename_prefix_edit, output_dir, W, H)
+                        
+                        # 2. 确保目录存在
+                        os.makedirs(full_output_folder, exist_ok=True)
+                        
+                        # 3. 扫描目录以查找最大编号
+                        #    (我们从 -1 开始，这样第一个文件就是 0)
+                        max_num = -1
+                        
+                        # 编译一个正则表达式来匹配 "base_filename_XXXXX.json"
+                        # re.escape() 确保 'poses/pose_edit' 这样的前缀被正确处理
+                        pattern = re.compile(re.escape(base_filename) + r"_(\d{5,})\.json")
+
+                        try:
+                            for f in os.listdir(full_output_folder):
+                                match = pattern.match(f)
+                                if match:
+                                    num = int(match.group(1))
+                                    max_num = max(max_num, num)
+                        except FileNotFoundError:
+                             # 目录刚被创建，所以 max_num 保持 -1
+                             pass 
+                        
+                        # 4. 计算新编号
+                        new_counter = max_num + 1 # 如果 max_num 是 -1, new_counter 是 0
+                        
+                        # 5. 格式化新文件名
+                        final_filename = f"{base_filename}_{new_counter:05d}.json"
+                        file_path = os.path.join(full_output_folder, final_filename)
+                    # --- 自定义计数器结束 ---
+
+                    # 6. 保存文件
                     with open(file_path, 'w') as f:
                         json.dump(data_to_save, f, indent=4)
+                    
+                    if not is_batch:
+                        # 打印正确的保存路径
+                        print(f"SDPose Node: Saved single pose JSON to: {file_path}")
 
                 except Exception as e:
                     if frame_idx == 0:

@@ -11,7 +11,7 @@ import torch
 from mmengine.logging import MessageHub
 from torch import Tensor
 
-from mmpose.evaluation.functional import keypoint_pck_accuracy
+#from mmpose.evaluation.functional import keypoint_pck_accuracy
 from mmpose.registry import MODELS
 from mmpose.utils.tensor_utils import to_numpy
 from mmpose.utils.typing import ConfigType, OptConfigType, OptSampleList

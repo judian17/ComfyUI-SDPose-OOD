@@ -13,7 +13,7 @@ from mmcv.cnn import (ConvModule, DepthwiseSeparableConvModule, Linear,
 from mmengine.structures import PixelData
 from torch import Tensor, nn
 
-from mmpose.evaluation.functional import pose_pck_accuracy
+#from mmpose.evaluation.functional import pose_pck_accuracy
 from mmpose.models.utils.tta import flip_heatmaps
 from mmpose.registry import KEYPOINT_CODECS, MODELS
 from mmpose.utils.tensor_utils import to_numpy

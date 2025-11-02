@@ -13,7 +13,7 @@ from mmengine.structures import PixelData
 from torch import Tensor, nn
 
 from mmpose.codecs.utils import get_simcc_normalized
-from mmpose.evaluation.functional import simcc_pck_accuracy
+#from mmpose.evaluation.functional import simcc_pck_accuracy
 from mmpose.models.utils.rtmcc_block import RTMCCBlock, ScaleNorm
 from mmpose.models.utils.tta import flip_vectors
 from mmpose.registry import KEYPOINT_CODECS, MODELS

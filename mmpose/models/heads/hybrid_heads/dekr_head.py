@@ -13,7 +13,7 @@ from mmengine.model import BaseModule, ModuleDict, Sequential
 from mmengine.structures import InstanceData, PixelData
 from torch import Tensor
 
-from mmpose.evaluation.functional.nms import nearby_joints_nms
+#from mmpose.evaluation.functional.nms import nearby_joints_nms
 from mmpose.models.utils.tta import flip_heatmaps
 from mmpose.registry import KEYPOINT_CODECS, MODELS
 from mmpose.utils.tensor_utils import to_numpy

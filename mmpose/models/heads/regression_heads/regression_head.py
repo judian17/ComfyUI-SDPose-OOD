@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from mmpose.evaluation.functional import keypoint_pck_accuracy
+#from mmpose.evaluation.functional import keypoint_pck_accuracy
 from mmpose.models.utils.tta import flip_coordinates
 from mmpose.registry import KEYPOINT_CODECS, MODELS
 from mmpose.utils.tensor_utils import to_numpy
