@@ -152,6 +152,7 @@ dmypy.json
 *.xml
 *.yaml
 *.yml
+!.github/workflows/publish.yaml
 data/
 datasets/
 checkpoints/

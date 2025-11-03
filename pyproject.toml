@@ -1,6 +1,6 @@
 [project]
 name = "sdpose-ood"
-description = ""
+description = "SDPose OOD nodes for ComfyUI"
 version = "1.0.0"
 license = {file = "LICENSE"} 
 # classifiers = [
