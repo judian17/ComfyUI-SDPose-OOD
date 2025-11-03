@@ -1091,7 +1091,7 @@ class SDPoseOODProcessor:
         frame_data = []
         for i in range(B):
             frame_data.append({
-                "canvas": np.zeros_like((images_np[i] * 255).astype(np.uint8)),
+                "canvas": np.zeros_like((images_np[i] * 255).astype(np.uint8), order='C'),
                 "all_keypoints": [],
                 "all_scores": [],
             })
