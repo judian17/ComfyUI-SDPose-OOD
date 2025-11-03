@@ -3,7 +3,7 @@ name: Publish to ComfyUI Registry
 on:
   push:
     branches:
-      - main  # 确保这里是你用的主分支 (可能是 main 或 master)
+      - master  # 确保这里是你用的主分支 (可能是 main 或 master)
     paths:
       - 'pyproject.toml' # 只在 pyproject.toml 变更时触发
 
