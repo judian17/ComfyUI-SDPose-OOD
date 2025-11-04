@@ -67,8 +67,9 @@ except ImportError:
 from diffusers import DDPMScheduler, AutoencoderKL, UNet2DConditionModel
 from transformers import CLIPTokenizer, CLIPTextModel
 
-# Try relative imports first, then absolute imports
-sys.path.append(str(Path(__file__).parent))
+package_path = str(Path(__file__).parent)
+if package_path not in sys.path:
+    sys.path.insert(0, package_path)
 # --- Imports from the original SDPose project ---
 # (We use absolute imports, enabled by sys.path.append on line 61)
 try:
