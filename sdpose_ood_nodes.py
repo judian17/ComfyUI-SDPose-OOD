@@ -70,12 +70,11 @@ from transformers import CLIPTokenizer, CLIPTextModel
 package_path = str(Path(__file__).parent)
 if package_path not in sys.path:
     sys.path.insert(0, package_path)
-# --- Imports from the original SDPose project ---
-# (We use absolute imports, enabled by sys.path.append on line 61)
+
 try:
-    from models.HeatmapHead import get_heatmap_head
-    from models.ModifiedUNet import Modified_forward
-    from pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
+    from .models.HeatmapHead import get_heatmap_head
+    from .models.ModifiedUNet import Modified_forward
+    from .pipelines.SDPose_D_Pipeline import SDPose_D_Pipeline
 except ImportError as e:
     print("="*50)
     print("SDPose Node: CRITICAL ERROR")
@@ -84,7 +83,7 @@ except ImportError as e:
     print("Please ensure the node was installed completely (including all sub-folders).")
     print(f"Original error: {e}")
     print("="*50)
-    raise e # 重新抛出异常，让 ComfyUI 知道加载失败
+    raise e
 from safetensors.torch import load_file
 
 try:
