@@ -102,8 +102,9 @@ except Exception as e:
 # --- Add custom folder paths to ComfyUI ---
 SDPOSE_MODEL_DIR = os.path.join(folder_paths.models_dir, "SDPose_OOD")
 YOLO_MODEL_DIR = os.path.join(folder_paths.models_dir, "yolo")
-folder_paths.folder_names_and_paths["SDPose_OOD"] = ([SDPOSE_MODEL_DIR], folder_paths.supported_pt_extensions)
-folder_paths.folder_names_and_paths["yolo"] = ([YOLO_MODEL_DIR], {".pt"})
+
+folder_paths.add_model_folder_path("SDPose_OOD", SDPOSE_MODEL_DIR, is_default=True)
+folder_paths.add_model_folder_path("yolo", YOLO_MODEL_DIR, is_default=False)
 
 os.makedirs(SDPOSE_MODEL_DIR, exist_ok=True)
 os.makedirs(YOLO_MODEL_DIR, exist_ok=True)
@@ -602,6 +603,15 @@ class SDPoseOODLoader:
     FUNCTION = "load_sdpose_model"
     CATEGORY = "SDPose"
 
+    def get_model_path(self, repo_name):
+        model_pathes = folder_paths.get_folder_paths("SDPose_OOD")
+        for path in model_pathes:
+            model_path = os.path.join(path, repo_name)
+            if os.path.exists(os.path.join(model_path, "unet")):
+                return model_path
+
+        return os.path.join(SDPOSE_MODEL_DIR, repo_name)
+
     def load_sdpose_model(self, model_type, unet_precision, device, unload_on_finish):
         repo_id = {
             "Body": "teemosliang/SDPose-Body",
@@ -609,8 +619,7 @@ class SDPoseOODLoader:
         }[model_type]
         
         keypoint_scheme = model_type.lower()
-        model_path = os.path.join(SDPOSE_MODEL_DIR, repo_id.split('/')[-1])
-        
+        model_path = self.get_model_path(repo_id.split('/')[-1])
         if not os.path.exists(os.path.join(model_path, "unet")):
             print(f"SDPose Node: Downloading model from {repo_id} to {model_path}")
             snapshot_download(repo_id=repo_id, local_dir=model_path, local_dir_use_symlinks=False)
