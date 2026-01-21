@@ -26,6 +26,19 @@
     * 通过 `git clone` 将此仓库克隆到你的 `ComfyUI/custom_nodes/` 目录下。
     * `cd ComfyUI/custom_nodes/SDPose-OOD-ComfyUI`
     * `pip install -r requirements.txt`
+    * 对于 `groundingdino-py`，需要在安装前设置环境变量：
+        - Windows 系统：
+          ```
+          set PYTHONUTF8=1
+          ```
+        - Linux 系统：
+          ```
+          export PYTHONUTF8=1
+          ```
+      然后安装 groundingdino-py：
+      ```
+      pip install groundingdino-py
+      ```
 
 2.  **安装模型 (自动或手动)**:
     * **自动 (推荐)**: 节点（`Load SDPose Model`, `Load YOLO Model`）在首次运行时会自动从 Hugging Face 和 Github 下载模型，并将其放置在正确的目录中。

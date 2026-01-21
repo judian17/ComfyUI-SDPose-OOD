@@ -54,6 +54,19 @@ It brings the powerful and robust pose estimation capabilities of SDPose-OOD int
 
 &nbsp;   * `pip install -r requirements.txt`
 
+* For `groundingdino-py`, you need to set the environment variable before installation:
+        - On Windows:
+          ```
+          set PYTHONUTF8=1
+          ```
+        - On Linux:
+          ```
+          export PYTHONUTF8=1
+          ```
+      Then install groundingdino-py:
+      ```
+      pip install groundingdino-py
+      ```
 
 
 2.  **Install Models (Automatic or Manual)**:

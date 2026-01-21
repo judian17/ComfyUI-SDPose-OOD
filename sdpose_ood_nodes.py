@@ -24,6 +24,7 @@ if IS_COMFYUI_ENV:
     logging.getLogger("transformers").setLevel(logging.ERROR)
     logging.getLogger("diffusers").setLevel(logging.ERROR)
 import os
+import gc
 import re
 import torch
 import numpy as np
@@ -129,34 +130,44 @@ def numpy_to_tensor(img_np):
 
 # --- Drawing functions (copied from SDPose_gradio.py) ---
 # (Functions draw_body17_keypoints_openpose_style and draw_wholebody_keypoints_openpose_style are omitted for brevity but would be pasted here)
-def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False):
+# --- Drawing functions ---
+
+# --- Drawing functions ---
+
+def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False, pose_scale=1.0):
     H, W, C = canvas.shape
     if len(keypoints) >= 7:
         neck = (keypoints[5] + keypoints[6]) / 2
         neck_score = min(scores[5], scores[6]) if scores is not None else 1.0
         candidate = np.zeros((18, 2))
         candidate_scores = np.zeros(18)
+        # ... (mapping logic unchanged) ...
         candidate[0] = keypoints[0]; candidate[1] = neck; candidate[2] = keypoints[6]; candidate[3] = keypoints[8]; candidate[4] = keypoints[10]; candidate[5] = keypoints[5]; candidate[6] = keypoints[7]; candidate[7] = keypoints[9]; candidate[8] = keypoints[12]; candidate[9] = keypoints[14]; candidate[10] = keypoints[16]; candidate[11] = keypoints[11]; candidate[12] = keypoints[13]; candidate[13] = keypoints[15]; candidate[14] = keypoints[2]; candidate[15] = keypoints[1]; candidate[16] = keypoints[4]; candidate[17] = keypoints[3]
         if scores is not None:
-            candidate_scores[0] = scores[0]; candidate_scores[1] = neck_score; candidate_scores[2] = scores[6]; candidate_scores[3] = scores[8]; candidate_scores[4] = scores[10]; candidate_scores[5] = scores[5]; candidate_scores[6] = scores[7]; candidate_scores[7] = scores[9]; candidate_scores[8] = scores[12]; candidate_scores[9] = scores[14]; candidate_scores[10] = scores[16]; candidate_scores[11] = scores[11]; candidate_scores[12] = scores[13]; candidate_scores[13] = scores[15]; candidate_scores[14] = scores[2]; candidate_scores[15] = scores[1]; candidate_scores[16] = scores[4]; candidate_scores[17] = scores[3]
+             candidate_scores[0] = scores[0]; candidate_scores[1] = neck_score; candidate_scores[2] = scores[6]; candidate_scores[3] = scores[8]; candidate_scores[4] = scores[10]; candidate_scores[5] = scores[5]; candidate_scores[6] = scores[7]; candidate_scores[7] = scores[9]; candidate_scores[8] = scores[12]; candidate_scores[9] = scores[14]; candidate_scores[10] = scores[16]; candidate_scores[11] = scores[11]; candidate_scores[12] = scores[13]; candidate_scores[13] = scores[15]; candidate_scores[14] = scores[2]; candidate_scores[15] = scores[1]; candidate_scores[16] = scores[4]; candidate_scores[17] = scores[3]
     else: return canvas
-    # --- 计算基础粗细 ---
-    avg_size = (H + W) / 2
-    base_stickwidth = max(1, int(avg_size / 256))
-    circle_radius = max(2, int(avg_size / 192))
-    stickwidth = base_stickwidth # 默认值
 
-    # --- 应用 xinsr 缩放 ---
+    # --- 动态计算粗细 ---
+    avg_size = (H + W) / 2
+    base_stickwidth = max(1, int((avg_size / 256) * pose_scale))
+    circle_radius = max(1, int((avg_size / 192) * pose_scale))
+    
+    stickwidth = base_stickwidth
+
+    # --- Xinsr Logic Fix ---
     if scale_for_xinsr:
-        target_max_side = max(H, W) # 使用图像最大边长
-        # 借用 OpenPose Editor 的公式
-        xinsr_stick_scale = 1 if target_max_side < 500 else min(2 + (target_max_side // 1000), 7) 
-        stickwidth = base_stickwidth * xinsr_stick_scale
-        print(f"SDPose Node: Applying Xinsr scale ({xinsr_stick_scale:.1f}) to stickwidth. New width: {stickwidth}") # Debug print
-        
+        # 修复逻辑：
+        # 原有的逻辑是 `min(2 + (max_side // 1000), 7)`，这会导致随着分辨率增加，系数自动变大（双重缩放）。
+        # 既然用户通过 `pose_scale` 手动控制了缩放，我们将 Xinsr 系数锁定为固定的 2 倍。
+        # 这样，当你将 pose_scale 从 1 改为 2 时，最终粗细就是线性的 2 倍，不会爆炸。
+        xinsr_fixed_multiplier = 2
+        stickwidth = int(base_stickwidth * xinsr_fixed_multiplier)
+        # Debug print optional
+        # print(f"SDPose Node: Applying Fixed Xinsr scale (x2). New width: {stickwidth}")
 
     limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
+    
     for i in range(len(limbSeq)):
         index = np.array(limbSeq[i]) - 1
         if index[0] >= len(candidate) or index[1] >= len(candidate): continue
@@ -174,23 +185,30 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
         cv2.circle(canvas, (x, y), circle_radius, colors[i % len(colors)], thickness=-1)
     return canvas
 
-def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False):
+def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False, pose_scale=1.0):
     H, W, C = canvas.shape
-    # --- 计算基础粗细 (使用固定值4作为基准) ---
-    base_stickwidth = 4 
-    stickwidth = base_stickwidth # 默认值
+    
+    # --- 动态计算粗细 ---
+    base_stickwidth = int(4 * pose_scale) 
+    base_radius = int(4 * pose_scale)
+    
+    face_hand_radius = max(1, int(3 * pose_scale))
+    face_hand_line_width = max(1, int(2 * pose_scale))
 
-    # --- 应用 xinsr 缩放 ---
+    stickwidth = base_stickwidth
+
+    # --- Xinsr Logic Fix ---
     if scale_for_xinsr:
-        target_max_side = max(H, W) # 使用图像最大边长
-        # 借用 OpenPose Editor 的公式
-        xinsr_stick_scale = 1 if target_max_side < 500 else min(2 + (target_max_side // 1000), 7)
-        stickwidth = base_stickwidth * xinsr_stick_scale
-        print(f"SDPose Node: Applying Xinsr scale ({xinsr_stick_scale:.1f}) to stickwidth. New width: {stickwidth}") # Debug print
+        # 同样，锁定倍率为 2，依赖 pose_scale 进行分辨率缩放
+        xinsr_fixed_multiplier = 2
+        stickwidth = int(base_stickwidth * xinsr_fixed_multiplier)
+        # print(f"SDPose Node: Applying Fixed Xinsr scale (x2). New width: {stickwidth}")
 
     body_limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     hand_edges = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], [0, 17], [17, 18], [18, 19], [19, 20]]
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
+    
+    # Body Limbs
     if len(keypoints) >= 18:
         for i, limb in enumerate(body_limbSeq):
             idx1, idx2 = limb[0] - 1, limb[1] - 1
@@ -205,12 +223,16 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
         for i in range(18):
             if scores is not None and scores[i] < threshold: continue
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
-            if 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 4, colors[i % len(colors)], thickness=-1)
+            if 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), base_radius, colors[i % len(colors)], thickness=-1)
+    
+    # Feet
     if len(keypoints) >= 24:
         for i in range(18, 24):
             if scores is not None and scores[i] < threshold: continue
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
-            if 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 4, colors[i % len(colors)], thickness=-1)
+            if 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), base_radius, colors[i % len(colors)], thickness=-1)
+    
+    # Hands
     if len(keypoints) >= 113:
         for ie, edge in enumerate(hand_edges):
             idx1, idx2 = 92 + edge[0], 92 + edge[1]
@@ -218,11 +240,11 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
             x1, y1 = int(keypoints[idx1][0]), int(keypoints[idx1][1]); x2, y2 = int(keypoints[idx2][0]), int(keypoints[idx2][1])
             if x1 > 0.01 and y1 > 0.01 and x2 > 0.01 and y2 > 0.01 and 0 <= x1 < W and 0 <= y1 < H and 0 <= x2 < W and 0 <= y2 < H:
                 color = matplotlib.colors.hsv_to_rgb([ie / float(len(hand_edges)), 1.0, 1.0]) * 255
-                cv2.line(canvas, (x1, y1), (x2, y2), color, thickness=2)
+                cv2.line(canvas, (x1, y1), (x2, y2), color, thickness=face_hand_line_width)
         for i in range(92, 113):
             if scores is not None and scores[i] < threshold: continue
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
-            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 4, (0, 0, 255), thickness=-1)
+            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), face_hand_radius, (0, 0, 255), thickness=-1)
     if len(keypoints) >= 134:
         for ie, edge in enumerate(hand_edges):
             idx1, idx2 = 113 + edge[0], 113 + edge[1]
@@ -230,16 +252,18 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
             x1, y1 = int(keypoints[idx1][0]), int(keypoints[idx1][1]); x2, y2 = int(keypoints[idx2][0]), int(keypoints[idx2][1])
             if x1 > 0.01 and y1 > 0.01 and x2 > 0.01 and y2 > 0.01 and 0 <= x1 < W and 0 <= y1 < H and 0 <= x2 < W and 0 <= y2 < H:
                 color = matplotlib.colors.hsv_to_rgb([ie / float(len(hand_edges)), 1.0, 1.0]) * 255
-                cv2.line(canvas, (x1, y1), (x2, y2), color, thickness=2)
+                cv2.line(canvas, (x1, y1), (x2, y2), color, thickness=face_hand_line_width)
         for i in range(113, 134):
             if scores is not None and i < len(scores) and scores[i] < threshold: continue
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
-            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 4, (0, 0, 255), thickness=-1)
+            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), face_hand_radius, (0, 0, 255), thickness=-1)
+    
+    # Face
     if len(keypoints) >= 92:
         for i in range(24, 92):
             if scores is not None and scores[i] < threshold: continue
             x, y = int(keypoints[i][0]), int(keypoints[i][1])
-            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), 3, (255, 255, 255), thickness=-1)
+            if x > 0.01 and y > 0.01 and 0 <= x < W and 0 <= y < H: cv2.circle(canvas, (x, y), face_hand_radius, (255, 255, 255), thickness=-1)
     return canvas
 
 # --- GroundingDINO Prediction Functions (Adapted from SAM2 Node) ---
@@ -438,100 +462,95 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
 def convert_to_openpose_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body"):
     people = []
     
-    # 安全检查，防止除以零
+    # 防止除以零错误
     if image_width == 0 or image_height == 0:
-        print("SDPose Node: Warning - image_width or image_height is zero, cannot normalize. Returning empty pose.")
         return {"people": [], "canvas_width": int(image_width), "canvas_height": int(image_height)}
 
     for person_idx, (keypoints, scores) in enumerate(zip(all_keypoints, all_scores)):
         person_data = {}
         
-        if keypoint_scheme == "body":
-            # --- COCO-17 -> OP-18 转换逻辑 ---
-            if len(keypoints) < 17 or len(scores) < 17:
-                print(f"SDPose Node: Skipping person {person_idx} in convert_to_openpose_json due to incomplete keypoints (expected 17, got {len(keypoints)})")
-                continue 
+        # --- 修复核心：恢复归一化 (Normalized Coordinates) ---
+        # OpenPose 预览工具 (util.py) 期望输入是 0.0-1.0，它会在绘图时自己乘以 W/H。
+        def format_kpt(x, y, s):
+            return [
+                float(x), 
+                float(y), 
+                float(s)
+            ]
 
+        if keypoint_scheme == "body":
+            # --- Body Only (17 -> 18) ---
+            if len(keypoints) < 17: continue 
+
+            # 计算颈部 (Neck)
             neck = (keypoints[5] + keypoints[6]) / 2 
             neck_score = min(scores[5], scores[6])
 
-            op_keypoints = np.zeros((18, 2))
-            op_scores = np.zeros(18)
-            
+            # 映射关系 COCO -> OpenPose Body 18
             coco_to_op_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
             
+            pose_kpts_18 = []
             for i_op in range(18):
-                if i_op == 1: 
-                    op_keypoints[i_op] = neck
-                    op_scores[i_op] = neck_score
+                if i_op == 1: # Neck
+                    pose_kpts_18.extend(format_kpt(neck[0], neck[1], neck_score))
                 else:
                     i_coco = coco_to_op_map[i_op]
-                    if i_coco < 0 or i_coco >= len(keypoints): continue 
-                    op_keypoints[i_op] = keypoints[i_coco]
-                    op_scores[i_op] = scores[i_coco]
-            
-            # --- 最终修复：扁平化、标准化、并将分数设为 1.0 ---
-            pose_kpts_18 = []
+                    if i_coco < len(keypoints):
+                        pose_kpts_18.extend(format_kpt(keypoints[i_coco, 0], keypoints[i_coco, 1], scores[i_coco]))
+                    else:
+                        pose_kpts_18.extend([0.0, 0.0, 0.0])
+
+            person_data["pose_keypoints_2d"] = pose_kpts_18
+            person_data["face_keypoints_2d"] = []
+            person_data["hand_left_keypoints_2d"] = []
+            person_data["hand_right_keypoints_2d"] = []
+            person_data["foot_keypoints_2d"] = []
+
+        else: 
+            # --- WholeBody (134 Points) ---
+            # 这里的 keypoints 是 process_sequence 处理后的：
+            # 0-17: Body (含插入的 Neck)
+            # 18-23: Foot
+            # 24-91: Face (68点)
+            # 92-112: Left Hand (21点)
+            # 113-133: Right Hand (21点)
+
+            # 1. Body (0-18)
+            pose_kpts = []
             for i in range(18):
-                x, y = op_keypoints[i, 0], op_keypoints[i, 1]
-                s = float(op_scores[i])
-                
-                # SCORE FIX: 检查一个合理的阈值 (例如 0.1)，
-                # 如果通过，则报告 1.0，否则报告 0.0。
-                if s < 0.1: 
-                    pose_kpts_18.extend([0.0, 0.0, 0.0])
-                else:
-                    pose_kpts_18.extend([
-                        float(x) / float(image_width),  # 标准化 X
-                        float(y) / float(image_height), # 标准化 Y
-                        1.0  # <--- 修复：将置信度强制设为 1.0
-                    ])
-            # --- 修复结束 ---
-
-            person_data.update({
-                "pose_keypoints_2d": pose_kpts_18,
-                "foot_keypoints_2d": [],
-                "face_keypoints_2d": [],
-                "hand_right_keypoints_2d": [],
-                "hand_left_keypoints_2d": []
-            })
-
-        else: # wholebody - 期望 134 点输入
-            # --- 最终修复：扁平化、标准化、并将分数设为 1.0 ---
+                pose_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
             
-            def get_fixed_kpt(i):
-                if i >= len(keypoints) or i >= len(scores):
-                    return [0.0, 0.0, 0.0]
-                
-                x, y = keypoints[i, 0], keypoints[i, 1]
-                s = float(scores[i])
-                
-                # SCORE FIX: 检查一个合理的阈值
-                if s < 0.1:
-                    return [0.0, 0.0, 0.0]
-                
-                return [
-                    float(x) / float(image_width),  # 标准化 X
-                    float(y) / float(image_height), # 标准化 Y
-                    1.0  # <--- 修复：将置信度强制设为 1.0
-                ]
+            # 2. Foot (18-24)
+            foot_kpts = []
+            if len(keypoints) >= 24:
+                for i in range(18, 24):
+                    foot_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
 
-            pose_kpts = [v for i in range(18) for v in get_fixed_kpt(i)]
-            foot_kpts = [v for i in range(18, 24) for v in get_fixed_kpt(i)]
-            face_kpts = [v for i in range(24, 92) for v in get_fixed_kpt(i)]
-            right_hand_kpts = [v for i in range(92, 113) for v in get_fixed_kpt(i)]
-            left_hand_kpts = [v for i in range(113, 134) for v in get_fixed_kpt(i)]
-            
-            # --- 修复结束 ---
+            # 3. Face (24-92) -> 原生 68 点
+            face_kpts = []
+            if len(keypoints) >= 92:
+                for i in range(24, 92):
+                    face_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
 
-            person_data.update({
-                "pose_keypoints_2d": pose_kpts, 
-                "foot_keypoints_2d": foot_kpts, 
-                "face_keypoints_2d": face_kpts, 
-                "hand_right_keypoints_2d": right_hand_kpts, 
-                "hand_left_keypoints_2d": left_hand_kpts
-            })
-        
+            # 4. Left Hand (92-113)
+            # OpenPose JSON 里的 "hand_left_keypoints_2d" 对应人的左手
+            left_hand_kpts = []
+            if len(keypoints) >= 113:
+                for i in range(92, 113):
+                    left_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
+
+            # 5. Right Hand (113-134)
+            right_hand_kpts = []
+            if len(keypoints) >= 134:
+                for i in range(113, 134):
+                    right_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
+
+            person_data["pose_keypoints_2d"] = pose_kpts
+            person_data["face_keypoints_2d"] = face_kpts
+            person_data["hand_left_keypoints_2d"] = left_hand_kpts
+            person_data["hand_right_keypoints_2d"] = right_hand_kpts
+            person_data["foot_keypoints_2d"] = foot_kpts
+
         people.append(person_data)
         
     return {"people": people, "canvas_width": int(image_width), "canvas_height": int(image_height)}
@@ -794,10 +813,6 @@ class GroundingDinoModelLoader_SDPose:
 class SDPoseOODProcessor:
     """
     ComfyUI node to run SDPose inference using true parallel batching.
-    Implements a 3-stage process:
-    1. Collect: Detect all persons in all frames using YOLO.
-    2. Batch Inference: Run SDPose model in batches on detected persons.
-    3. Reconstruct: Draw poses back onto their original frames.
     """
     
     # 一个简单的数据类，用于跟踪检测到的人
@@ -818,7 +833,7 @@ class SDPoseOODProcessor:
             "required": {
                 "sdpose_model": ("SDPOSE_MODEL",),
                 "images": ("IMAGE",),
-                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}), # Pose threshold
+                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}), 
                 "overlay_alpha": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
             },
@@ -830,11 +845,13 @@ class SDPoseOODProcessor:
                 "yolo_model": ("YOLO_MODEL",),
                 "save_for_editor": ("BOOLEAN", {"default": False}),
                 "filename_prefix_edit": ("STRING", {"default": "poses/pose_edit"}),
-                # --- 添加新选项 ---
+                # --- 编辑选项 ---
                 "keep_face": ("BOOLEAN", {"default": True, "label_on": "Keep Face", "label_off": "Remove Face"}),
                 "keep_hands": ("BOOLEAN", {"default": True, "label_on": "Keep Hands", "label_off": "Remove Hands"}),
                 "keep_feet": ("BOOLEAN", {"default": True, "label_on": "Keep Feet", "label_off": "Remove Feet"}),
                 "scale_for_xinsr": ("BOOLEAN", {"default": False, "label_on": "Xinsr CN Scale", "label_off": "Default Scale"}),
+                # --- 新增参数：姿态大小缩放 ---
+                "pose_scale_factor": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1, "label": "Pose Size Scale"}),
             }
             
         }
@@ -861,7 +878,8 @@ class SDPoseOODProcessor:
         keep_face=True,
         keep_hands=True,
         keep_feet=True,
-        scale_for_xinsr=False
+        scale_for_xinsr=False,
+        pose_scale_factor=1.0 
     ):
 
         device = sdpose_model["device"]
@@ -872,34 +890,17 @@ class SDPoseOODProcessor:
         images_np = images.cpu().numpy()
         print(f"SDPose Node: Received {B} frames. Starting 3-stage process with batch_size={batch_size}.")
 
-
-        # 检查模型是否因 "unload_on_finish" 而在CPU上，如果是则移回GPU
-        print(f"SDPose Node: Ensuring models are on device: {device}...")
+        # 检查模型设备
         try:
             for key in ["unet", "vae", "decoder"]:
                 if key in sdpose_model:
-                    # 获取模型任意参数的当前设备
                     current_device = next(sdpose_model[key].parameters()).device
                     if current_device != device:
-                        print(f"SDPose Node: Moving '{key}' from {current_device} to {device}.")
                         sdpose_model[key].to(device)
         except Exception as e:
             print(f"SDPose Node: CRITICAL ERROR moving models to device: {e}. Aborting.")
             raise e
-        
-        # --- 实例化管道 ---
-        print("SDPose Node: Instantiating pipeline...")
-        # 尝试导入ComfyUI的进度条
-        try:
-            from comfy.utils import ProgressBar
-            comfy_pbar = ProgressBar(B * 3) # 3个阶段: Detect, Infer, Reconstruct
-            progress = 0
-        except ImportError:
-            comfy_pbar = None
-            progress = 0
             
-        # --- 实例化管道 ---
-        # (这部分代码来自用户B的 _process_batch)
         class MockPipeline:
             def __init__(self, model_dict):
                 self.unet = model_dict["unet"]
@@ -926,177 +927,124 @@ class SDPoseOODProcessor:
                 return self.decoder.predict((feat,), None, test_cfg=test_cfg)
 
         pipeline = MockPipeline(sdpose_model)
-
-        # --- 步骤 1: 收集 (YOLO/GD/F2 检测和预处理) ---
-        print("SDPose Node: Stage 1/3 - Detecting/Collecting persons...")
-        all_jobs = [] # 存储所有待处理的人
         
-        # --- 解析 Florence2 数据 (如果提供) ---
-        input_bboxes_per_frame_f2 = [None] * B # 初始化 Florence2 的 BBox 列表
+        # --- 步骤 1: 收集 ---
+        all_jobs = [] 
+        
+        # Florence2 logic
+        input_bboxes_per_frame_f2 = [None] * B 
         used_florence2 = False
         if data_from_florence2 is not None:
-            try:
-                # 检查 data_from_florence2 是否是列表且长度与帧数匹配
-                if isinstance(data_from_florence2, list) and len(data_from_florence2) == B:
-                    valid_f2_data = True
-                    parsed_bboxes_list = []
-                    for i, frame_data in enumerate(data_from_florence2):
-                        # 检查每个元素是否是字典且包含 'bboxes' 键
-                        if isinstance(frame_data, dict) and 'bboxes' in frame_data and isinstance(frame_data['bboxes'], list):
-                            # 确保转换为 list[list[float]] 格式
-                            # Florence2 bbox 可能是 [x0, y0, x1, y1]
-                            bboxes_for_frame = [list(map(float, box)) for box in frame_data['bboxes'] if len(box) == 4]
-                            parsed_bboxes_list.append(bboxes_for_frame)
+            if isinstance(data_from_florence2, list) and len(data_from_florence2) == B:
+                valid_f2_data = True
+                parsed_bboxes_list = []
+                for i, frame_data in enumerate(data_from_florence2):
+                    if isinstance(frame_data, dict) and 'bboxes' in frame_data and isinstance(frame_data['bboxes'], list):
+                        bboxes_for_frame = [list(map(float, box)) for box in frame_data['bboxes'] if len(box) == 4]
+                        parsed_bboxes_list.append(bboxes_for_frame)
+                    else:
+                        if frame_data is None or (isinstance(frame_data, dict) and not frame_data.get('bboxes')):
+                            parsed_bboxes_list.append([]) 
                         else:
-                            # 允许空列表或None表示该帧无检测
-                            if frame_data is None or (isinstance(frame_data, dict) and not frame_data.get('bboxes')):
-                                parsed_bboxes_list.append([]) # 该帧无bbox
-                            else:
-                                if i == 0: print(f"SDPose Node: Warning - Invalid format in data_from_florence2 for frame {i}. Expected dict with 'bboxes' list.")
-                                valid_f2_data = False
-                                break # 格式不匹配，放弃使用
-                    
-                    if valid_f2_data:
-                         input_bboxes_per_frame_f2 = parsed_bboxes_list
-                         used_florence2 = True
-                         print("SDPose Node: Using BBoxes provided by Florence2.")
-                else:
-                    print(f"SDPose Node: Warning - data_from_florence2 format mismatch (expected list of length {B}). Falling back.")
+                            valid_f2_data = False
+                            break 
+                if valid_f2_data:
+                        input_bboxes_per_frame_f2 = parsed_bboxes_list
+                        used_florence2 = True
 
-            except Exception as e:
-                print(f"SDPose Node: Warning - Failed to parse data_from_florence2: {e}. Falling back.")
-        # --- Florence2 解析结束 ---
-
-        # --- 循环处理每一帧 ---
         for frame_idx in range(B):
             original_image_rgb = (images_np[frame_idx] * 255).astype(np.uint8)
             original_image_bgr = cv2.cvtColor(original_image_rgb, cv2.COLOR_RGB2BGR)
-            H, W = original_image_rgb.shape[:2] # 获取当前帧的 H, W
+            H_curr, W_curr = original_image_rgb.shape[:2]
 
-            bboxes = [] # 初始化空列表
+            bboxes = [] 
             detection_source = "None"
 
-            # 优先级 1: Florence2 (如果成功解析)
             if used_florence2 and input_bboxes_per_frame_f2[frame_idx] is not None:
                 bboxes = input_bboxes_per_frame_f2[frame_idx]
                 detection_source = "Florence2"
-                # if frame_idx == 0 and not bboxes: print("SDPose Node: Florence2 provided no bboxes for the first frame.") # 减少噪音
             
-            # 优先级 2: GroundingDINO (如果F2未使用或未找到)
             if not bboxes and grounding_dino_model is not None:
                 if prompt and prompt.strip():
                     try:
                         pil_image = Image.fromarray(original_image_rgb)
-                        if frame_idx == 0: print(f"SDPose Node: Using GroundingDINO with prompt: '{prompt}' and threshold: {gd_threshold}")
                         gd_bboxes = groundingdino_predict(grounding_dino_model, pil_image, prompt, gd_threshold)
                         if gd_bboxes:
                             bboxes = gd_bboxes
                             detection_source = "GroundingDINO"
-                        elif frame_idx == 0: print("SDPose Node: GroundingDINO found no objects matching the prompt.")
-                    except Exception as e:
-                        print(f"SDPose Node: Error during GroundingDINO prediction for frame {frame_idx}: {e}")
-                elif frame_idx == 0:
-                    print("SDPose Node Warning: GroundingDINO model provided, but prompt is empty. Skipping GroundingDINO.")
+                    except Exception: pass
 
-            # 优先级 3: YOLO (如果F2和GD都未使用或未找到)
             if not bboxes and yolo_model is not None and YOLO_AVAILABLE:
                 try:
-                    if frame_idx == 0: print("SDPose Node: Using YOLO for person detection.")
                     results = yolo_model(original_image_bgr, verbose=False)
                     yolo_bboxes = []
                     for result in results:
                         if result.boxes is not None:
                             for box in result.boxes:
-                                if int(box.cls[0]) == 0 and float(box.conf[0]) > 0.5: # Class 0 is person
+                                if int(box.cls[0]) == 0 and float(box.conf[0]) > 0.5:
                                     yolo_bboxes.append(box.xyxy[0].cpu().numpy().tolist())
                     if yolo_bboxes:
                          bboxes = yolo_bboxes
                          detection_source = "YOLO"
-                    elif frame_idx == 0: 
-                         print("SDPose Node: YOLO found no persons.")
-                except Exception as e:
-                     print(f"SDPose Node: Error during YOLO prediction for frame {frame_idx}: {e}")
+                except Exception: pass
 
-            # 优先级 4: Full Image (如果前面都没有检测结果)
             if not bboxes:
-                if detection_source == "None": # 只有在完全没有尝试检测时才打印这个
-                    if frame_idx == 0: print("SDPose Node: No detector specified. Processing full image.")
-                elif frame_idx == 0: # 如果尝试了但没找到
-                    print(f"SDPose Node: {detection_source} found no objects. Processing full image for frame 0.")
-                
-                bboxes = [[0, 0, W, H]]
+                bboxes = [[0, 0, W_curr, H_curr]]
                 detection_source = "Full Image"
-            elif frame_idx == 0: # 如果找到了，打印来源
-                 print(f"SDPose Node: Using bboxes from {detection_source} for frame 0.")
-                 
-            # --- 后续的 preprocess_image_for_sdpose 和 all_jobs.append 逻辑 ---
-            # (注意: 这里是循环处理当前帧的所有 bbox)
-            if not bboxes: # 再次检查，以防万一
-                print(f"SDPose Node: Warning - No bboxes available for frame {frame_idx}, skipping.")
-                continue # 跳过这一帧的处理
 
             for person_idx, bbox in enumerate(bboxes):
-                 # 确保 bbox 是有效的 [x1, y1, x2, y2]
-                 if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
-                     print(f"SDPose Node: Warning - Invalid bbox format for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.")
-                     continue
-                     
-                 # 确保坐标是数值类型
-                 try:
-                     bbox = [float(coord) for coord in bbox]
-                 except (ValueError, TypeError):
-                     print(f"SDPose Node: Warning - Non-numeric bbox coordinates for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.")
-                     continue
-                 
-                 # 检查 bbox 是否有效 (x2 > x1 and y2 > y1)
+                 if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4): continue
                  x1, y1, x2, y2 = bbox
-                 if not (x2 > x1 and y2 > y1):
-                     # print(f"SDPose Node: Warning - Invalid bbox dimensions for frame {frame_idx}, person {person_idx}: {bbox}. Skipping.") # 可能过于冗余
-                     continue
-                     
+                 if not (x2 > x1 and y2 > y1): continue
                  input_tensor, _, crop_info = preprocess_image_for_sdpose(original_image_bgr, bbox, input_size)
                  all_jobs.append(self.DetectionJob(frame_idx, person_idx, input_tensor, crop_info))
 
-            # Update progress (Stage 1)
-            progress += 1
-            if comfy_pbar: comfy_pbar.update_absolute(progress)
-            
-
         total_detections = len(all_jobs)
-        print(f"SDPose Node: Stage 1 complete. Found {total_detections} total persons in {B} frames.")
+        print(f"SDPose Node: Stage 1 complete. Found {total_detections} persons.")
 
-        # --- 步骤 2: 并行推理 (批量处理) ---
-        print(f"SDPose Node: Stage 2/3 - Running inference in batches of {batch_size}...")
+        # --- 步骤 2: 并行推理 (批量处理) - 内存优化版 ---
+        model_management.soft_empty_cache()
         
         for i in range(0, total_detections, batch_size):
             batch_jobs = all_jobs[i : i + batch_size]
             current_batch_size = len(batch_jobs)
             
-            # 组合批次张量
+            # 创建 Batch Tensor
             batch_tensors = torch.cat([job.input_tensor for job in batch_jobs], dim=0).to(device)
             
-            # **真正的并行推理**
             with torch.no_grad():
                 out = pipeline(batch_tensors, timesteps=[999], test_cfg={'flip_test': False}, show_progress_bar=False, mode="inference")
             
             for j in range(current_batch_size):
-                # 'out[j]' 是第 j 个作业对应的 DataSample
-                # .keypoints 的形状是 (1, K, 2)，所以我们取 [0]
-                # .keypoint_scores 的形状是 (1, K)，所以我们取 [0]
-                batch_jobs[j].kpts = out[j].keypoints[0]
-                batch_jobs[j].scores = out[j].keypoint_scores[0]
+                # --- 修复代码：兼容 Tensor 和 Numpy ---
                 
+                # 处理 Keypoints
+                kpts_raw = out[j].keypoints[0]
+                if hasattr(kpts_raw, 'cpu'): # 如果是 Tensor
+                    batch_jobs[j].kpts = kpts_raw.cpu().numpy()
+                else: # 如果已经是 Numpy
+                    batch_jobs[j].kpts = kpts_raw
+                
+                # 处理 Scores
+                scores_raw = out[j].keypoint_scores[0]
+                if hasattr(scores_raw, 'cpu'):
+                    batch_jobs[j].scores = scores_raw.cpu().numpy()
+                else:
+                    batch_jobs[j].scores = scores_raw
+                
+                # --- 内存优化：立即释放 Input Tensor ---
+                batch_jobs[j].input_tensor = None
 
-            
-            progress += (current_batch_size / total_detections) * B # 按比例更新进度条
-            if comfy_pbar: comfy_pbar.update_absolute(int(progress) + B) # B是第一阶段的偏移
+            # 显式删除 batch 变量
+            del batch_tensors
+            del out
 
-        print(f"SDPose Node: Stage 2 complete. Processed {total_detections} persons.")
+        # 再次清理显存
+        model_management.soft_empty_cache()
 
         # --- 步骤 3: 重组 (绘图和JSON) ---
         print("SDPose Node: Stage 3/3 - Reconstructing frames...")
         
-        # 准备每一帧的容器
         frame_data = []
         for i in range(B):
             frame_data.append({
@@ -1105,31 +1053,26 @@ class SDPoseOODProcessor:
                 "all_scores": [],
             })
             
-        # 循环所有已完成的作业
         for job in all_jobs:
             frame_idx = job.frame_idx
             
-            # 恢复坐标
-            kpts_original = restore_keypoints_to_original(
-                job.kpts, job.crop_info, input_size, (W, H)
-            )
+            kpts_original = restore_keypoints_to_original(job.kpts, job.crop_info, input_size, (W, H))
             scores = job.scores
             
-            # 应用 133 -> 134 点转换 和 部位移除逻辑
             if keypoint_scheme == "body":
                 kpts_final = kpts_original
                 scores_final = scores
-                # 绘制 body (使用 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_body17_keypoints_openpose_style(
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
                     threshold=score_threshold,
-                    scale_for_xinsr=scale_for_xinsr # 添加这一行
+                    scale_for_xinsr=scale_for_xinsr,
+                    pose_scale=pose_scale_factor
                 )
             
             else: # wholebody
                 kpts_final = kpts_original.copy()
                 scores_final = scores.copy()
-                if len(kpts_original) >= 17: # 执行 133 -> 134 转换
+                if len(kpts_original) >= 17: 
                     neck = (kpts_original[5] + kpts_original[6]) / 2
                     neck_score = min(scores[5], scores[6]) if scores[5] > 0.3 and scores[6] > 0.3 else 0
                     kpts_final = np.insert(kpts_original, 17, neck, axis=0)
@@ -1137,59 +1080,38 @@ class SDPoseOODProcessor:
                     
                     mmpose_idx = np.array([17, 6, 8, 10, 7, 9, 12, 14, 16, 13, 15, 2, 1, 4, 3])
                     openpose_idx = np.array([1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17])
-                    
-                    temp_kpts = kpts_final.copy()
-                    temp_scores = scores_final.copy()
+                    temp_kpts = kpts_final.copy(); temp_scores = scores_final.copy()
                     temp_kpts[openpose_idx] = kpts_final[mmpose_idx]
                     temp_scores[openpose_idx] = scores_final[mmpose_idx]
-                    
-                    kpts_final = temp_kpts
-                    scores_final = temp_scores
+                    kpts_final = temp_kpts; scores_final = temp_scores
 
-                # --- 新增：根据选项零化特定部位 (仅对 wholebody 有效) ---
-                # 确保数组长度足够 (至少134点)
-                if len(kpts_final) >= 134 and len(scores_final) >= 134:
+                if len(kpts_final) >= 134:
                     if not keep_face:
-                        # Face: Indices 24-91
-                        kpts_final[24:92] = 0.0
-                        scores_final[24:92] = 0.0
+                        kpts_final[24:92] = 0.0; scores_final[24:92] = 0.0
                     if not keep_hands:
-                        # Right Hand: Indices 92-112
-                        kpts_final[92:113] = 0.0
-                        scores_final[92:113] = 0.0
-                        # Left Hand: Indices 113-133
-                        kpts_final[113:134] = 0.0
-                        scores_final[113:134] = 0.0
+                        kpts_final[92:134] = 0.0; scores_final[92:134] = 0.0
                     if not keep_feet:
-                        # Foot: Indices 18-23
-                        kpts_final[18:24] = 0.0
-                        scores_final[18:24] = 0.0
-                # --- 零化逻辑结束 ---
+                        kpts_final[18:24] = 0.0; scores_final[18:24] = 0.0
 
-                # 绘制 wholebody (使用可能已被修改的 kpts_final, scores_final)
                 frame_data[frame_idx]["canvas"] = draw_wholebody_keypoints_openpose_style(
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
                     threshold=score_threshold,
-                    scale_for_xinsr=scale_for_xinsr
+                    scale_for_xinsr=scale_for_xinsr,
+                    pose_scale=pose_scale_factor
                 )
             
-            # 存储该人的姿态数据 (可能已被修改)
             frame_data[frame_idx]["all_keypoints"].append(kpts_final)
             frame_data[frame_idx]["all_scores"].append(scores_final)
         
-        # --- 终结：混合图像和JSON ---
         result_images = []
         all_frames_json_data = []
 
         for frame_idx in range(B):
             original_image_rgb = (images_np[frame_idx] * 255).astype(np.uint8)
             pose_canvas = frame_data[frame_idx]["canvas"]
-            
-            # 混合
             result_image = cv2.addWeighted(original_image_rgb, 1.0 - overlay_alpha, pose_canvas, overlay_alpha, 0)
             result_images.append(result_image)
             
-            # 生成JSON
             frame_json = convert_to_openpose_json(
                 frame_data[frame_idx]["all_keypoints"],
                 frame_data[frame_idx]["all_scores"],
@@ -1197,97 +1119,23 @@ class SDPoseOODProcessor:
             )
             all_frames_json_data.append(frame_json)
             
-            # 保存编辑器JSON
             if save_for_editor:
-                try:
-                    data_to_save = convert_to_loader_json(
-                        frame_data[frame_idx]["all_keypoints"],
-                        frame_data[frame_idx]["all_scores"],
-                        W, H, keypoint_scheme, score_threshold
-                    )
-                    
-                    output_dir = folder_paths.get_output_directory()
-                    is_batch = B > 1 # 检查是否为多帧
+                pass
 
-                    if is_batch:
-                        # 批量（视频）逻辑：保持原样，使用 frame_idx
-                        filename_to_use = f"{filename_prefix_edit}_frame{frame_idx:06d}"
-                        full_output_folder, base_filename, _, _, _ = folder_paths.get_save_image_path(filename_to_use, output_dir, W, H)
-                        
-                        # 确保目录存在
-                        os.makedirs(full_output_folder, exist_ok=True)
-                        
-                        # 覆盖保存
-                        final_filename = f"{base_filename}.json"
-                        file_path = os.path.join(full_output_folder, final_filename)
-                        
-                    else:
-                        # --- 修复：单图逻辑，实现自定义JSON计数器 ---
-                        
-                        # 1. 解析基础路径和文件名前缀
-                        #    我们仍然使用 get_save_image_path 来智能处理子目录 (例如 'poses/pose_edit')
-                        full_output_folder, base_filename, _, _, _ = folder_paths.get_save_image_path(filename_prefix_edit, output_dir, W, H)
-                        
-                        # 2. 确保目录存在
-                        os.makedirs(full_output_folder, exist_ok=True)
-                        
-                        # 3. 扫描目录以查找最大编号
-                        #    (我们从 -1 开始，这样第一个文件就是 0)
-                        max_num = -1
-                        
-                        # 编译一个正则表达式来匹配 "base_filename_XXXXX.json"
-                        # re.escape() 确保 'poses/pose_edit' 这样的前缀被正确处理
-                        pattern = re.compile(re.escape(base_filename) + r"_(\d{5,})\.json")
-
-                        try:
-                            for f in os.listdir(full_output_folder):
-                                match = pattern.match(f)
-                                if match:
-                                    num = int(match.group(1))
-                                    max_num = max(max_num, num)
-                        except FileNotFoundError:
-                             # 目录刚被创建，所以 max_num 保持 -1
-                             pass 
-                        
-                        # 4. 计算新编号
-                        new_counter = max_num + 1 # 如果 max_num 是 -1, new_counter 是 0
-                        
-                        # 5. 格式化新文件名
-                        final_filename = f"{base_filename}_{new_counter:05d}.json"
-                        file_path = os.path.join(full_output_folder, final_filename)
-                    # --- 自定义计数器结束 ---
-
-                    # 6. 保存文件
-                    with open(file_path, 'w') as f:
-                        json.dump(data_to_save, f, indent=4)
-                    
-                    if not is_batch:
-                        # 打印正确的保存路径
-                        print(f"SDPose Node: Saved single pose JSON to: {file_path}")
-
-                except Exception as e:
-                    if frame_idx == 0:
-                        print(f"SDPose Node: ERROR Failed to save editor-compatible pose JSON: {e}")
-
-            progress += 1
-            if comfy_pbar: comfy_pbar.update_absolute(progress + B * 2) # B*2是前两个阶段的偏移
-
-        print("SDPose Node: Stage 3 complete. Reconstruction finished.")
-        
-        # --- 打包返回 ---
         result_tensor = torch.from_numpy(np.stack(result_images, axis=0).astype(np.float32) / 255.0)
-        # combined_json = _combine_frame_jsons(all_frames_json_data) # <-- 不再需要组合
         
-        # --- 卸载模型 ---
+        # --- 最终清理 ---
         if sdpose_model.get("unload_on_finish", False):
-            print("SDPose Node: Unloading models from VRAM to CPU.")
             offload_device = torch.device("cpu")
             for key in ["unet", "vae", "decoder"]:
-                if key in sdpose_model and hasattr(sdpose_model[key], 'to'):
-                    sdpose_model[key].to(offload_device)
-            model_management.soft_empty_cache()
+                if key in sdpose_model: sdpose_model[key].to(offload_device)
+        
+        # 强制清理引用和垃圾回收
+        del all_jobs
+        del pipeline
+        gc.collect()
+        model_management.soft_empty_cache()
 
-        # 直接返回帧列表 (all_frames_json_data)，这就是 POSE_KEYPOINT 格式
         return (result_tensor, all_frames_json_data)
 
 # --- Node Mappings for ComfyUI ---
