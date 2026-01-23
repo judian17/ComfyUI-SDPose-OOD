@@ -132,8 +132,6 @@ def numpy_to_tensor(img_np):
 # (Functions draw_body17_keypoints_openpose_style and draw_wholebody_keypoints_openpose_style are omitted for brevity but would be pasted here)
 # --- Drawing functions ---
 
-# --- Drawing functions ---
-
 def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False, pose_scale=1.0):
     H, W, C = canvas.shape
     if len(keypoints) >= 7:
@@ -141,7 +139,6 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
         neck_score = min(scores[5], scores[6]) if scores is not None else 1.0
         candidate = np.zeros((18, 2))
         candidate_scores = np.zeros(18)
-        # ... (mapping logic unchanged) ...
         candidate[0] = keypoints[0]; candidate[1] = neck; candidate[2] = keypoints[6]; candidate[3] = keypoints[8]; candidate[4] = keypoints[10]; candidate[5] = keypoints[5]; candidate[6] = keypoints[7]; candidate[7] = keypoints[9]; candidate[8] = keypoints[12]; candidate[9] = keypoints[14]; candidate[10] = keypoints[16]; candidate[11] = keypoints[11]; candidate[12] = keypoints[13]; candidate[13] = keypoints[15]; candidate[14] = keypoints[2]; candidate[15] = keypoints[1]; candidate[16] = keypoints[4]; candidate[17] = keypoints[3]
         if scores is not None:
              candidate_scores[0] = scores[0]; candidate_scores[1] = neck_score; candidate_scores[2] = scores[6]; candidate_scores[3] = scores[8]; candidate_scores[4] = scores[10]; candidate_scores[5] = scores[5]; candidate_scores[6] = scores[7]; candidate_scores[7] = scores[9]; candidate_scores[8] = scores[12]; candidate_scores[9] = scores[14]; candidate_scores[10] = scores[16]; candidate_scores[11] = scores[11]; candidate_scores[12] = scores[13]; candidate_scores[13] = scores[15]; candidate_scores[14] = scores[2]; candidate_scores[15] = scores[1]; candidate_scores[16] = scores[4]; candidate_scores[17] = scores[3]
@@ -149,21 +146,17 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
 
     # --- 动态计算粗细 ---
     avg_size = (H + W) / 2
+    # 基础粗细基于图像尺寸，现在乘以用户自定义的 pose_scale
     base_stickwidth = max(1, int((avg_size / 256) * pose_scale))
     circle_radius = max(1, int((avg_size / 192) * pose_scale))
     
     stickwidth = base_stickwidth
 
-    # --- Xinsr Logic Fix ---
+    # --- Xinsr Logic (Fixed Multiplier) ---
     if scale_for_xinsr:
-        # 修复逻辑：
-        # 原有的逻辑是 `min(2 + (max_side // 1000), 7)`，这会导致随着分辨率增加，系数自动变大（双重缩放）。
-        # 既然用户通过 `pose_scale` 手动控制了缩放，我们将 Xinsr 系数锁定为固定的 2 倍。
-        # 这样，当你将 pose_scale 从 1 改为 2 时，最终粗细就是线性的 2 倍，不会爆炸。
+        # 锁定倍率为 2，依赖 pose_scale 进行分辨率适配
         xinsr_fixed_multiplier = 2
         stickwidth = int(base_stickwidth * xinsr_fixed_multiplier)
-        # Debug print optional
-        # print(f"SDPose Node: Applying Fixed Xinsr scale (x2). New width: {stickwidth}")
 
     limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     colors = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0], [0, 255, 85], [0, 255, 170], [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 170], [255, 0, 85]]
@@ -188,7 +181,7 @@ def draw_body17_keypoints_openpose_style(canvas, keypoints, scores=None, thresho
 def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, threshold=0.3, overlay_mode=False, overlay_alpha=0.6, scale_for_xinsr=False, pose_scale=1.0):
     H, W, C = canvas.shape
     
-    # --- 动态计算粗细 ---
+    # --- 动态计算粗细 (基于 pose_scale) ---
     base_stickwidth = int(4 * pose_scale) 
     base_radius = int(4 * pose_scale)
     
@@ -197,12 +190,10 @@ def draw_wholebody_keypoints_openpose_style(canvas, keypoints, scores=None, thre
 
     stickwidth = base_stickwidth
 
-    # --- Xinsr Logic Fix ---
+    # --- Xinsr Logic (Fixed Multiplier) ---
     if scale_for_xinsr:
-        # 同样，锁定倍率为 2，依赖 pose_scale 进行分辨率缩放
         xinsr_fixed_multiplier = 2
         stickwidth = int(base_stickwidth * xinsr_fixed_multiplier)
-        # print(f"SDPose Node: Applying Fixed Xinsr scale (x2). New width: {stickwidth}")
 
     body_limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], [1, 16], [16, 18]]
     hand_edges = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], [0, 17], [17, 18], [18, 19], [19, 20]]
@@ -398,41 +389,51 @@ def restore_keypoints_to_original(keypoints, crop_info, input_size, original_siz
 
 def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body", threshold=0.3):
     """
-    Converts keypoints to the "Loader" JSON format (OpenPose-18 body only)
-    regardless of the input scheme (Body or WholeBody).
-    Applies a score threshold, setting keypoints below it to [0, 0, 0].
+    将关键点转换为编辑器可读的 "Loader" JSON 格式 (OpenPose-18 body only)。
+    无论输入是 Body (17点) 还是 WholeBody (134点)，都统一输出为 OpenPose 18点格式。
     """
     people = []
+    
+    # 确保输入是列表
+    if not isinstance(all_keypoints, list):
+        return {"width": int(image_width), "height": int(image_height), "people": []}
+
     for keypoints, scores in zip(all_keypoints, all_scores):
         person_data = {}
         pose_kpts_18 = []
+        
+        # 确保 keypoints 是 numpy 数组
+        if not isinstance(keypoints, np.ndarray):
+            keypoints = np.array(keypoints)
+        if not isinstance(scores, np.ndarray):
+            scores = np.array(scores)
 
         if keypoint_scheme == "body":
-            # Input is COCO-17, we must convert it to OpenPose-18 by adding a 'Neck'
+            # --- Body (COCO-17) -> 需要计算 Neck 转换为 OpenPose-18 ---
             if len(keypoints) < 17 or len(scores) < 17:
-                continue # Skip if data is incomplete
+                continue 
 
-            # 1. Calculate Neck
+            # 1. 计算 Neck (Shoulder 中点)
             neck = (keypoints[5] + keypoints[6]) / 2
             neck_score = min(scores[5], scores[6])
 
-            # 2. Create 18-point arrays from 17-point arrays
+            # 2. 映射关系
             op_keypoints = np.zeros((18, 2))
             op_scores = np.zeros(18)
             
             coco_to_op_map = [0, -1, 6, 8, 10, 5, 7, 9, 12, 14, 16, 11, 13, 15, 2, 1, 4, 3]
             
             for i_op in range(18):
-                if i_op == 1: # Neck keypoint
+                if i_op == 1: # Neck
                     op_keypoints[i_op] = neck
                     op_scores[i_op] = neck_score
                 else:
                     i_coco = coco_to_op_map[i_op]
-                    if i_coco >= len(keypoints): continue
-                    op_keypoints[i_op] = keypoints[i_coco]
-                    op_scores[i_op] = scores[i_coco]
+                    if i_coco < len(keypoints):
+                        op_keypoints[i_op] = keypoints[i_coco]
+                        op_scores[i_op] = scores[i_coco]
             
-            # 3. Flatten to [x, y, score, ...] with thresholding
+            # 3. 扁平化 [x, y, score]
             for i in range(18):
                 score = float(op_scores[i])
                 if score < threshold:
@@ -440,12 +441,13 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
                 else:
                     pose_kpts_18.extend([float(op_keypoints[i, 0]), float(op_keypoints[i, 1]), score])
 
-        else: # "wholebody"
-            # Input is already OpenPose-18 + face/hands/feet. We just take the first 18 points.
+        else: 
+            # --- WholeBody (Already OpenPose format) ---
+            # 这里的 keypoints 已经在 process_sequence 中被重组为 OpenPose 格式
+            # 所以前 18 个点就是我们需要的 Body 18
             if len(keypoints) < 18 or len(scores) < 18:
-                continue # Skip if data is incomplete
+                continue
                 
-            # Flatten to [x, y, score, ...] with thresholding
             for i in range(18):
                 score = float(scores[i])
                 if score < threshold:
@@ -456,7 +458,6 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
         person_data["pose_keypoints_2d"] = pose_kpts_18
         people.append(person_data)
 
-    # Use 'width' and 'height' keys as per the target format
     return {"width": int(image_width), "height": int(image_height), "people": people}
 
 def convert_to_openpose_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body"):
@@ -813,6 +814,10 @@ class GroundingDinoModelLoader_SDPose:
 class SDPoseOODProcessor:
     """
     ComfyUI node to run SDPose inference using true parallel batching.
+    Implements a 3-stage process:
+    1. Collect: Detect all persons in all frames using YOLO.
+    2. Batch Inference: Run SDPose model in batches on detected persons.
+    3. Reconstruct: Draw poses back onto their original frames.
     """
     
     # 一个简单的数据类，用于跟踪检测到的人
@@ -850,7 +855,7 @@ class SDPoseOODProcessor:
                 "keep_hands": ("BOOLEAN", {"default": True, "label_on": "Keep Hands", "label_off": "Remove Hands"}),
                 "keep_feet": ("BOOLEAN", {"default": True, "label_on": "Keep Feet", "label_off": "Remove Feet"}),
                 "scale_for_xinsr": ("BOOLEAN", {"default": False, "label_on": "Xinsr CN Scale", "label_off": "Default Scale"}),
-                # --- 新增参数：姿态大小缩放 ---
+                # --- 核心修复：找回 Pose Scale 参数 ---
                 "pose_scale_factor": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1, "label": "Pose Size Scale"}),
             }
             
@@ -879,8 +884,9 @@ class SDPoseOODProcessor:
         keep_hands=True,
         keep_feet=True,
         scale_for_xinsr=False,
-        pose_scale_factor=1.0 
+        pose_scale_factor=1.0 # <--- 必须包含此参数
     ):
+        import gc 
 
         device = sdpose_model["device"]
         keypoint_scheme = sdpose_model["keypoint_scheme"]
@@ -1009,37 +1015,29 @@ class SDPoseOODProcessor:
             batch_jobs = all_jobs[i : i + batch_size]
             current_batch_size = len(batch_jobs)
             
-            # 创建 Batch Tensor
             batch_tensors = torch.cat([job.input_tensor for job in batch_jobs], dim=0).to(device)
             
             with torch.no_grad():
                 out = pipeline(batch_tensors, timesteps=[999], test_cfg={'flip_test': False}, show_progress_bar=False, mode="inference")
             
             for j in range(current_batch_size):
-                # --- 修复代码：兼容 Tensor 和 Numpy ---
-                
-                # 处理 Keypoints
                 kpts_raw = out[j].keypoints[0]
-                if hasattr(kpts_raw, 'cpu'): # 如果是 Tensor
+                if hasattr(kpts_raw, 'cpu'):
                     batch_jobs[j].kpts = kpts_raw.cpu().numpy()
-                else: # 如果已经是 Numpy
+                else:
                     batch_jobs[j].kpts = kpts_raw
                 
-                # 处理 Scores
                 scores_raw = out[j].keypoint_scores[0]
                 if hasattr(scores_raw, 'cpu'):
                     batch_jobs[j].scores = scores_raw.cpu().numpy()
                 else:
                     batch_jobs[j].scores = scores_raw
                 
-                # --- 内存优化：立即释放 Input Tensor ---
                 batch_jobs[j].input_tensor = None
 
-            # 显式删除 batch 变量
             del batch_tensors
             del out
 
-        # 再次清理显存
         model_management.soft_empty_cache()
 
         # --- 步骤 3: 重组 (绘图和JSON) ---
@@ -1066,7 +1064,7 @@ class SDPoseOODProcessor:
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
                     threshold=score_threshold,
                     scale_for_xinsr=scale_for_xinsr,
-                    pose_scale=pose_scale_factor
+                    pose_scale=pose_scale_factor # <--- 传递参数
                 )
             
             else: # wholebody
@@ -1097,7 +1095,7 @@ class SDPoseOODProcessor:
                     frame_data[frame_idx]["canvas"], kpts_final, scores_final, 
                     threshold=score_threshold,
                     scale_for_xinsr=scale_for_xinsr,
-                    pose_scale=pose_scale_factor
+                    pose_scale=pose_scale_factor # <--- 传递参数
                 )
             
             frame_data[frame_idx]["all_keypoints"].append(kpts_final)
@@ -1119,8 +1117,58 @@ class SDPoseOODProcessor:
             )
             all_frames_json_data.append(frame_json)
             
+            # --- 修复后的保存编辑器 JSON 逻辑 ---
             if save_for_editor:
-                pass
+                try:
+                    data_to_save = convert_to_loader_json(
+                        frame_data[frame_idx]["all_keypoints"],
+                        frame_data[frame_idx]["all_scores"],
+                        W, H, keypoint_scheme, score_threshold
+                    )
+                    
+                    output_dir = folder_paths.get_output_directory()
+                    is_batch = B > 1 
+
+                    if is_batch:
+                        filename_to_use = f"{filename_prefix_edit}_frame{frame_idx:06d}"
+                        full_output_folder, base_filename, _, _, _ = folder_paths.get_save_image_path(filename_to_use, output_dir, W, H)
+                        os.makedirs(full_output_folder, exist_ok=True)
+                        final_filename = f"{base_filename}.json"
+                        file_path = os.path.join(full_output_folder, final_filename)
+                        
+                    else:
+                        full_output_folder, base_filename, _, subfolder, _ = folder_paths.get_save_image_path(filename_prefix_edit, output_dir, W, H)
+                        
+                        os.makedirs(full_output_folder, exist_ok=True)
+                        
+                        counter = 1
+                        try:
+                            existing_files = [f for f in os.listdir(full_output_folder) if f.startswith(base_filename + "_") and f.endswith(".json")]
+                            if existing_files:
+                                max_counter = 0
+                                for f in existing_files:
+                                    try:
+                                        num_str = f[len(base_filename)+1:-5]
+                                        num = int(num_str)
+                                        if num > max_counter:
+                                            max_counter = num
+                                    except ValueError:
+                                        continue
+                                counter = max_counter + 1
+                        except FileNotFoundError:
+                            pass
+
+                        final_filename = f"{base_filename}_{counter:05d}.json"
+                        file_path = os.path.join(full_output_folder, final_filename)
+
+                    with open(file_path, 'w') as f:
+                        json.dump(data_to_save, f, indent=4)
+                    
+                    if not is_batch:
+                        print(f"SDPose Node: Saved pose JSON to: {file_path}")
+
+                except Exception as e:
+                    print(f"SDPose Node: ERROR Failed to save editor JSON for frame {frame_idx}: {e}")
 
         result_tensor = torch.from_numpy(np.stack(result_images, axis=0).astype(np.float32) / 255.0)
         
@@ -1130,7 +1178,6 @@ class SDPoseOODProcessor:
             for key in ["unet", "vae", "decoder"]:
                 if key in sdpose_model: sdpose_model[key].to(offload_device)
         
-        # 强制清理引用和垃圾回收
         del all_jobs
         del pipeline
         gc.collect()
