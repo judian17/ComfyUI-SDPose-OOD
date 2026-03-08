@@ -8,6 +8,8 @@
 
 它将 SDPose-OOD 强大的姿态估计功能带入 ComfyUI 工作流中，能够从图像中提取高鲁棒性的身体或全身姿态。
 
+**ComfyUI官方已经原生支持SDPose_OOD，可额外借助此节点[ComfyUI_YOLO_For_Multi_SDPose_Detection](https://github.com/judian17/ComfyUI_YOLO_For_Multi_SDPose_Detection) 实现多人姿态估计。**
+
 ## 特性
 
 * **两种模型支持**:
