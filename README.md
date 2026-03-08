@@ -16,6 +16,8 @@ This project is a ComfyUI custom node implementation of [SDPose-OOD](https://git
 
 It brings the powerful and robust pose estimation capabilities of SDPose-OOD into the ComfyUI workflow, allowing for the extraction of high-quality body or whole-body poses from images.
 
+**[2026.03.08] ComfyUI officially supports SDPose_OOD natively, and multi-person pose estimation can be additionally achieved using the [ComfyUI_YOLO_For_Multi_SDPose_Detection](https://github.com/judian17/ComfyUI_YOLO_For_Multi_SDPose_Detection) node.**
+
 
 
 ## Features
@@ -203,4 +205,5 @@ It brings the powerful and robust pose estimation capabilities of SDPose-OOD int
 6.  Set `save_for_editor` to `True` (if you want to edit it later).
 
 7.  Connect a `Preview Image` node to the `image` output.
+
 
