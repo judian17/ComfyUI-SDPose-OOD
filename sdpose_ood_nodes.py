@@ -387,7 +387,8 @@ def restore_keypoints_to_original(keypoints, crop_info, input_size, original_siz
     keypoints_restored[:, 1] = keypoints[:, 1] * scale_y + y1
     return keypoints_restored
 
-def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body", threshold=0.3):
+def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height, keypoint_scheme="body", threshold=0.3, enable_filter=True):
+
     """
     将关键点转换为编辑器可读的 "Loader" JSON 格式 (OpenPose-18 body only)。
     无论输入是 Body (17点) 还是 WholeBody (134点)，都统一输出为 OpenPose 18点格式。
@@ -436,7 +437,7 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
             # 3. 扁平化 [x, y, score]
             for i in range(18):
                 score = float(op_scores[i])
-                if score < threshold:
+                if enable_filter and score < threshold:
                     pose_kpts_18.extend([0.0, 0.0, 0.0])
                 else:
                     pose_kpts_18.extend([float(op_keypoints[i, 0]), float(op_keypoints[i, 1]), score])
@@ -450,7 +451,7 @@ def convert_to_loader_json(all_keypoints, all_scores, image_width, image_height,
                 
             for i in range(18):
                 score = float(scores[i])
-                if score < threshold:
+                if enable_filter and score < threshold:
                     pose_kpts_18.extend([0.0, 0.0, 0.0])
                 else:
                     pose_kpts_18.extend([float(keypoints[i, 0]), float(keypoints[i, 1]), score])
@@ -838,7 +839,12 @@ class SDPoseOODProcessor:
             "required": {
                 "sdpose_model": ("SDPOSE_MODEL",),
                 "images": ("IMAGE",),
-                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}), 
+                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}),
+                "enable_confidence_filter": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Filter Low Confidence",
+                    "label_off": "Keep All Keypoints"
+                }),
                 "overlay_alpha": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
             },
@@ -871,6 +877,7 @@ class SDPoseOODProcessor:
         sdpose_model,
         images,
         score_threshold,
+        enable_confidence_filter,
         overlay_alpha,
         batch_size=8,
         grounding_dino_model=None,
@@ -886,6 +893,7 @@ class SDPoseOODProcessor:
         scale_for_xinsr=False,
         pose_scale_factor=1.0 # <--- 必须包含此参数
     ):
+
         import gc 
 
         device = sdpose_model["device"]
@@ -1123,7 +1131,7 @@ class SDPoseOODProcessor:
                     data_to_save = convert_to_loader_json(
                         frame_data[frame_idx]["all_keypoints"],
                         frame_data[frame_idx]["all_scores"],
-                        W, H, keypoint_scheme, score_threshold
+                        W, H, keypoint_scheme, score_threshold, enable_confidence_filter
                     )
                     
                     output_dir = folder_paths.get_output_directory()
