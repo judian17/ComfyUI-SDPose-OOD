@@ -528,29 +528,32 @@ def convert_to_openpose_json(all_keypoints, all_scores, image_width, image_heigh
                 for i in range(18, 24):
                     foot_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
 
-            # 3. Face (24-92) -> 原生 68 点
+            # 3. Face (24-92) -> 70 点 (68 面部标志 + 双眼)
             face_kpts = []
             if len(keypoints) >= 92:
+                # 68 面部标志点
                 for i in range(24, 92):
                     face_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
+                # 添加右眼 (body[14]) 和左眼 (body[15])
+                face_kpts.extend(format_kpt(keypoints[14, 0], keypoints[14, 1], scores[14]))
+                face_kpts.extend(format_kpt(keypoints[15, 0], keypoints[15, 1], scores[15]))
 
-            # 4. Left Hand (92-113)
-            # OpenPose JSON 里的 "hand_left_keypoints_2d" 对应人的左手
-            left_hand_kpts = []
+            # 4. Right Hand (92-113) - 官方规范：92-112 = 右手
+            right_hand_kpts = []
             if len(keypoints) >= 113:
                 for i in range(92, 113):
-                    left_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
+                    right_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
 
-            # 5. Right Hand (113-134)
-            right_hand_kpts = []
+            # 5. Left Hand (113-134) - 官方规范：113-133 = 左手
+            left_hand_kpts = []
             if len(keypoints) >= 134:
                 for i in range(113, 134):
-                    right_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
+                    left_hand_kpts.extend(format_kpt(keypoints[i, 0], keypoints[i, 1], scores[i]))
 
             person_data["pose_keypoints_2d"] = pose_kpts
             person_data["face_keypoints_2d"] = face_kpts
-            person_data["hand_left_keypoints_2d"] = left_hand_kpts
             person_data["hand_right_keypoints_2d"] = right_hand_kpts
+            person_data["hand_left_keypoints_2d"] = left_hand_kpts
             person_data["foot_keypoints_2d"] = foot_kpts
 
         people.append(person_data)
