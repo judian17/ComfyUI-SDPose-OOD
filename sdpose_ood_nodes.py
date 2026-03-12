@@ -893,7 +893,7 @@ class SDPoseOODProcessor:
         keep_hands=True,
         keep_feet=True,
         scale_for_xinsr=False,
-        pose_scale_factor=1.0 # <--- 必须包含此参数
+        pose_scale_factor=1.0, # <--- 必须包含此参数
         enable_confidence_filter=True
     ):
 
