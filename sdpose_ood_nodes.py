@@ -843,11 +843,6 @@ class SDPoseOODProcessor:
                 "sdpose_model": ("SDPOSE_MODEL",),
                 "images": ("IMAGE",),
                 "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.1, "max": 0.9, "step": 0.05}),
-                "enable_confidence_filter": ("BOOLEAN", {
-                    "default": True,
-                    "label_on": "Filter Low Confidence",
-                    "label_off": "Keep All Keypoints"
-                }),
                 "overlay_alpha": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64}),
             },
@@ -866,6 +861,11 @@ class SDPoseOODProcessor:
                 "scale_for_xinsr": ("BOOLEAN", {"default": False, "label_on": "Xinsr CN Scale", "label_off": "Default Scale"}),
                 # --- 核心修复：找回 Pose Scale 参数 ---
                 "pose_scale_factor": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 10.0, "step": 0.1, "label": "Pose Size Scale"}),
+                "enable_confidence_filter": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Filter Low Confidence",
+                    "label_off": "Keep All Keypoints"
+                }),
             }
             
         }
@@ -880,7 +880,6 @@ class SDPoseOODProcessor:
         sdpose_model,
         images,
         score_threshold,
-        enable_confidence_filter,
         overlay_alpha,
         batch_size=8,
         grounding_dino_model=None,
@@ -894,7 +893,8 @@ class SDPoseOODProcessor:
         keep_hands=True,
         keep_feet=True,
         scale_for_xinsr=False,
-        pose_scale_factor=1.0 # <--- 必须包含此参数
+        pose_scale_factor=1.0, # <--- 必须包含此参数
+        enable_confidence_filter=True
     ):
 
         import gc 
